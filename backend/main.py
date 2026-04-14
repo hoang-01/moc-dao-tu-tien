@@ -1,4 +1,5 @@
 def main():
+    """Điểm khởi đầu của ứng dụng Backend."""
     print("Hello from backend!")
 
 
