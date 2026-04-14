@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 # Dự án: Mộc Đạo Tu Tiên (Flora Cultivation)
 
-> **Phiên bản:** 2.0  
+> **Phiên bản:** 3.0  
 > **Ngày tạo:** 2026-04-09  
 > **Cập nhật:** 2026-04-14
 
@@ -13,7 +13,8 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 
 ## 2. Đối tượng người dùng
 
-- Người trồng cây tại nhà muốn có thêm động lực chăm sóc cây thông qua yếu tố game hóa.
+- **Người dùng cuối:** Người trồng cây tại nhà muốn có thêm động lực chăm sóc cây thông qua yếu tố game hóa.
+- **Admin / Nhà vận hành:** Nhà phát triển hoặc quản trị viên chịu trách nhiệm vận hành, giám sát và cấu hình hệ thống.
 
 ## 3. Phạm vi dự án
 
@@ -58,6 +59,25 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 - Hiển thị bảng xếp hạng các cây có Tu Vi cao nhất trong hệ thống.
 - Tạo yếu tố cạnh tranh nhẹ giữa các người dùng, thúc đẩy động lực chăm sóc cây.
 
+### 3.9. Bảng điều khiển Admin (Admin Dashboard)
+- Tổng quan toàn hệ thống: số lượng người dùng, thiết bị đang hoạt động, thiết bị offline, tổng số cây được liên kết.
+- Biểu đồ thống kê: số người dùng mới theo ngày/tuần, tỷ lệ thiết bị online/offline, phân bố Cảnh Giới của tất cả cây trong hệ thống.
+
+### 3.10. Quản lý Thiết bị IoT (Device Management)
+- Xem danh sách tất cả thiết bị, trạng thái kết nối (online/offline), lần gửi dữ liệu cuối.
+- Vô hiệu hóa thiết bị bất thường hoặc bị lỗi.
+
+### 3.11. Quản lý Loại cây & Ngưỡng lý tưởng (Plant Profile Management)
+- CRUD (Thêm/Sửa/Xóa) các loại cây được hỗ trợ trong hệ thống.
+- Cấu hình ngưỡng lý tưởng (nhiệt độ, độ ẩm, ánh sáng…) cho từng loại cây — thay vì hard-code trong mã nguồn.
+- Thay đổi có hiệu lực ngay mà không cần triển khai lại hệ thống.
+
+### 3.12. Cấu hình Tu Vi & Cảnh Giới (EXP & Rank Configuration)
+- Cấu hình hệ số cộng/trừ điểm Tu Vi theo mức môi trường.
+- Cấu hình các mốc Tu Vi cần thiết để đột phá từng Cảnh Giới.
+- Thay đổi có hiệu lực ngay mà không cần cập nhật mã nguồn.
+
+
 ## 4. Ràng buộc & Giả định
 
 | Hạng mục | Nội dung |
@@ -68,6 +88,7 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 
 ## 5. Tiêu chí chấp nhận (Acceptance Criteria)
 
+### Người dùng cuối
 - Cảm biến đo được các chỉ số môi trường và gửi dữ liệu liên tục lên hệ thống.
 - Hệ thống phân loại đúng chất lượng môi trường theo ngưỡng của loại cây.
 - Điểm Tu Vi được cộng/trừ chính xác theo chất lượng môi trường mỗi chu kỳ.
@@ -77,6 +98,12 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 - Người dùng đăng nhập Google, liên kết chậu cây, đặt tên và chọn loại cây thành công.
 - Người dùng có thể thay đổi thông tin cây sau khi liên kết.
 - Bảng xếp hạng hiển thị đúng thứ tự Tu Vi giữa các người dùng.
+
+### Admin / Nhà vận hành
+- Admin Dashboard hiển thị đúng số liệu tổng quan (người dùng, thiết bị, cây).
+- Admin xem được danh sách thiết bị và trạng thái kết nối realtime.
+- Admin thêm/sửa/xóa loại cây và ngưỡng lý tưởng thành công, thay đổi có hiệu lực ngay.
+- Admin cấu hình được hệ số Tu Vi và mốc Cảnh Giới mà không cần sửa mã nguồn.
 
 ## 6. Ngoài phạm vi (Out of Scope)
 
