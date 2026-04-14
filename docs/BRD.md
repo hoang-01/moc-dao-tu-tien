@@ -1,7 +1,7 @@
 # Business Requirements Document (BRD)
 # Dự án: Mộc Đạo Tu Tiên (Flora Cultivation)
 
-> **Phiên bản:** 3.0  
+> **Phiên bản:** 3.1  
 > **Ngày tạo:** 2026-04-09  
 > **Cập nhật:** 2026-04-14
 
@@ -40,39 +40,35 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 - Đánh dấu ngưỡng lý tưởng trên biểu đồ để người dùng dễ so sánh.
 - Giúp người dùng nhận ra xu hướng (cây đang tốt lên hay xấu đi) và tác động sau khi điều chỉnh.
 
-### 3.5. Cảnh báo & Thông báo
-- Hệ thống chủ động cảnh báo khi môi trường rơi vào trạng thái Xấu hoặc Nguy hiểm kéo dài.
-- Cảnh báo khi thiết bị mất kết nối quá lâu.
-- Cảnh báo hiển thị trên Dashboard (in-app) và tự biến mất khi tình trạng trở lại bình thường.
 
-### 3.6. Hồ sơ cây & Liên kết chậu cây
+### 3.5. Hồ sơ cây & Liên kết chậu cây
 - Người dùng liên kết chậu cây với tài khoản qua **Plant Code** (in trên thiết bị).
 - Sau khi liên kết, người dùng đặt tên cho cây và chọn loại cây.
 - Người dùng có thể thay đổi thông tin cây (tên, loại cây) sau khi liên kết.
 - Mỗi tài khoản quản lý **1 chậu cây**.
 
-### 3.7. Định danh & Xác thực
+### 3.6. Định danh & Xác thực
 - Đăng nhập bằng **tài khoản Google**.
 - Ghi nhớ phiên đăng nhập.
 
-### 3.8. Bảng xếp hạng (Leaderboard)
+### 3.7. Bảng xếp hạng (Leaderboard)
 - Hiển thị bảng xếp hạng các cây có Tu Vi cao nhất trong hệ thống.
 - Tạo yếu tố cạnh tranh nhẹ giữa các người dùng, thúc đẩy động lực chăm sóc cây.
 
-### 3.9. Bảng điều khiển Admin (Admin Dashboard)
+### 3.8. Bảng điều khiển Admin (Admin Dashboard)
 - Tổng quan toàn hệ thống: số lượng người dùng, thiết bị đang hoạt động, thiết bị offline, tổng số cây được liên kết.
 - Biểu đồ thống kê: số người dùng mới theo ngày/tuần, tỷ lệ thiết bị online/offline, phân bố Cảnh Giới của tất cả cây trong hệ thống.
 
-### 3.10. Quản lý Thiết bị IoT (Device Management)
+### 3.9. Quản lý Thiết bị IoT (Device Management)
 - Xem danh sách tất cả thiết bị, trạng thái kết nối (online/offline), lần gửi dữ liệu cuối.
 - Vô hiệu hóa thiết bị bất thường hoặc bị lỗi.
 
-### 3.11. Quản lý Loại cây & Ngưỡng lý tưởng (Plant Profile Management)
+### 3.10. Quản lý Loại cây & Ngưỡng lý tưởng (Plant Profile Management)
 - CRUD (Thêm/Sửa/Xóa) các loại cây được hỗ trợ trong hệ thống.
 - Cấu hình ngưỡng lý tưởng (nhiệt độ, độ ẩm, ánh sáng…) cho từng loại cây — thay vì hard-code trong mã nguồn.
 - Thay đổi có hiệu lực ngay mà không cần triển khai lại hệ thống.
 
-### 3.12. Cấu hình Tu Vi & Cảnh Giới (EXP & Rank Configuration)
+### 3.11. Cấu hình Tu Vi & Cảnh Giới (EXP & Rank Configuration)
 - Cấu hình hệ số cộng/trừ điểm Tu Vi theo mức môi trường.
 - Cấu hình các mốc Tu Vi cần thiết để đột phá từng Cảnh Giới.
 - Thay đổi có hiệu lực ngay mà không cần cập nhật mã nguồn.
@@ -94,7 +90,6 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 - Điểm Tu Vi được cộng/trừ chính xác theo chất lượng môi trường mỗi chu kỳ.
 - Cây tự động đột phá Cảnh Giới khi đạt đủ Tu Vi.
 - Dashboard hiển thị đầy đủ: chỉ số, đánh giá, Tu Vi, Cảnh Giới, tiến trình, và biểu đồ xu hướng.
-- Hệ thống cảnh báo khi môi trường xấu kéo dài hoặc mất kết nối.
 - Người dùng đăng nhập Google, liên kết chậu cây, đặt tên và chọn loại cây thành công.
 - Người dùng có thể thay đổi thông tin cây sau khi liên kết.
 - Bảng xếp hạng hiển thị đúng thứ tự Tu Vi giữa các người dùng.

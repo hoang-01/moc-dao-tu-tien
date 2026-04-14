@@ -1,10 +1,10 @@
-# Product Requirements Document (PRD)
+﻿# Product Requirements Document (PRD)
 # Dự án: Mộc Đạo Tu Tiên (Flora Cultivation)
 
-> **Phiên bản:** 2.0  
+> **Phiên bản:** 2.1  
 > **Ngày tạo:** 2026-04-09  
 > **Cập nhật:** 2026-04-14  
-> **BRD tham chiếu:** v3.0
+> **BRD tham chiếu:** v3.1
 
 ---
 
@@ -48,7 +48,7 @@
 | Thuộc tính | Mô tả |
 |---|---|
 | **Nhu cầu** | Giám sát toàn bộ hệ thống, phát hiện sớm thiết bị lỗi, cấu hình linh hoạt các tham số game |
-| **Hành vi** | Kiểm tra tổng quan hệ thống định kỳ, xử lý sự cố khi có cảnh báo |
+| **Hành vi** | Kiểm tra tổng quan hệ thống định kỳ |
 | **Kỳ vọng** | Dashboard admin cung cấp thống kê tổng quan, cho phép thao tác quản lý nhanh mà không cần sửa mã nguồn |
 
 ---
@@ -147,75 +147,7 @@
 
 **Tiêu chí chấp nhận:**
 - [ ] Điểm Tu Vi được cộng/trừ chính xác theo chất lượng môi trường mỗi chu kỳ.
-- [ ] Cây tự động đột phá Cảnh Giới khi đạt đủ mốc Tu Vi.
-- [ ] Dashboard hiển thị Cảnh Giới hiện tại và thanh tiến trình tới cảnh giới tiếp theo.
-
----
-
-### F-06: Dashboard (Giao diện trạng thái)
-
-| Mục | Nội dung |
-|---|---|
-| **Mô tả** | Giao diện chính hiển thị tổng quan trạng thái cây cho người dùng |
-
-**Thông tin hiển thị:**
-
-| # | Nội dung | Mô tả |
-|---|---|---|
-| 1 | Chỉ số môi trường | Giá trị hiện tại từ các cảm biến |
-| 2 | Đánh giá chất lượng | Mức phân loại môi trường hiện tại (trực quan bằng màu sắc, icon) |
-| 3 | Tổng điểm Tu Vi | Tổng EXP tích lũy của cây |
-| 4 | Cảnh Giới hiện tại | Bậc rank hiện tại của cây |
-| 5 | Thanh tiến trình | Tiến trình tới cảnh giới tiếp theo |
-
-**User Stories:**
-- Là người dùng, tôi muốn mở Dashboard và thấy ngay toàn bộ trạng thái cây trong một giao diện dễ đọc.
-- Là người dùng, tôi muốn đánh giá chất lượng được hiển thị trực quan (màu sắc, icon) để nắm bắt nhanh.
-- Là người dùng, tôi muốn thấy thanh tiến trình Tu Vi để biết mình còn bao xa tới cảnh giới tiếp theo.
-
-**Tiêu chí chấp nhận:**
-- [ ] Dashboard hiển thị đầy đủ: chỉ số môi trường, đánh giá, Tu Vi, Cảnh Giới, và thanh tiến trình.
-
----
-
-### F-07: Lịch sử & Biểu đồ xu hướng
-
-| Mục | Nội dung |
-|---|---|
-| **Mô tả** | Hiển thị biểu đồ xu hướng các chỉ số môi trường trong khoảng thời gian gần nhất |
-| **Tính năng** | Đánh dấu ngưỡng lý tưởng trên biểu đồ để người dùng dễ so sánh |
-
-**User Stories:**
-- Là người dùng, tôi muốn xem biểu đồ xu hướng môi trường để biết cây đang tốt lên hay xấu đi.
-- Là người dùng, tôi muốn thấy ngưỡng lý tưởng trên biểu đồ để biết mình đang cách mức tốt bao xa.
-- Là người dùng, tôi muốn đánh giá được tác động sau khi điều chỉnh (tưới nước, di chuyển cây...).
-
-**Tiêu chí chấp nhận:**
-- [ ] Biểu đồ hiển thị xu hướng các chỉ số môi trường theo thời gian.
-- [ ] Ngưỡng lý tưởng được đánh dấu rõ ràng trên biểu đồ.
-
----
-
-### F-08: Cảnh báo & Thông báo
-
-| Mục | Nội dung |
-|---|---|
-| **Mô tả** | Hệ thống chủ động cảnh báo khi môi trường hoặc thiết bị gặp vấn đề |
-| **Loại cảnh báo** | Môi trường Xấu/Nguy hiểm kéo dài; Thiết bị mất kết nối quá lâu |
-| **Hiển thị** | Trên Dashboard (in-app), tự biến mất khi tình trạng trở lại bình thường |
-
-**User Stories:**
-- Là người dùng, tôi muốn được cảnh báo khi môi trường cây xấu kéo dài để kịp thời xử lý.
-- Là người dùng, tôi muốn biết khi thiết bị mất kết nối để kiểm tra lại phần cứng.
-- Là người dùng, tôi muốn cảnh báo tự mất đi khi tình trạng trở lại bình thường.
-
-**Tiêu chí chấp nhận:**
-- [ ] Cảnh báo hiển thị trên Dashboard khi môi trường xấu kéo dài hoặc thiết bị mất kết nối.
-- [ ] Cảnh báo tự động biến mất khi vấn đề được giải quyết.
-
----
-
-### F-09: Bảng xếp hạng (Leaderboard)
+- [ ] Cây t### F-08: Bảng xếp hạng (Leaderboard)
 
 | Mục | Nội dung |
 |---|---|
@@ -233,11 +165,80 @@
 
 ## 4. Yêu cầu tính năng — Admin / Nhà vận hành
 
-### F-10: Bảng điều khiển Admin (Admin Dashboard)
+### F-09: Bảng điều khiển Admin (Admin Dashboard)
 
 | Mục | Nội dung |
 |---|---|
 | **Mô tả** | Giao diện tổng quan toàn hệ thống dành cho Admin |
+
+**Thông tin hiển thị:**
+
+| # | Nội dung | Mô tả |
+|---|---|---|
+| 1 | Tổng quan | Số lượng người dùng, thiết bị hoạt động, thiết bị offline, tổng cây liên kết |
+| 2 | Biểu đồ thống kê | Số người dùng mới theo ngày/tuần, tỷ lệ online/offline, phân bố Cảnh Giới |
+
+**User Stories:**
+- Là admin, tôi muốn xem tổng quan hệ thống (số người dùng, thiết bị, cây) trong một màn hình.
+- Là admin, tôi muốn xem biểu đồ thống kê để nắm được xu hướng tăng trưởng và tình trạng hệ thống.
+
+**Tiêu chí chấp nhận:**
+- [ ] Admin Dashboard hiển thị đúng số liệu tổng quan realtime.
+- [ ] Biểu đồ thống kê hiển thị chính xác dữ liệu theo ngày/tuần.
+
+---
+
+### F-10: Quản lý & Đăng ký Thiết bị (Device Provisioning)
+
+| Mục | Nội dung |
+|---|---|
+| **Mô tả** | Quản lý vòng đời thiết bị: từ khi sản xuất đến khi tới tay người dùng |
+| **Chức năng Admin** | 1. **Tạo thiết bị mới:** Hệ thống tự sinh bộ đôi: Plant Code & Verify Code.<br>2. **Quản lý danh sách:** Xem trạng thái, lần cuối gửi dữ liệu. |
+| **Quy trình** | Admin tạo bộ mã → Nạp Plant Code vào FW → In (Code+Verify) lên nhãn → Giao cho người dùng |
+
+**User Stories:**
+- Là admin, tôi muốn tạo mã thiết bị mới để nạp vào firmware trước khi đóng gói sản phẩm.
+- Là admin, tôi muốn xem danh sách thiết bị and trạng thái kết nối để phát hiện thiết bị lỗi.
+
+**Tiêu chí chấp nhận:**
+- [ ] Admin xem được danh sách thiết bị với trạng thái kết nối realtime.
+
+---
+
+### F-11: Quản lý Loại cây & Ngưỡng lý tưởng (Plant Profile Management)
+
+| Mục | Nội dung |
+|---|---|
+| **Mô tả** | CRUD các loại cây được hỗ trợ và cấu hình ngưỡng lý tưởng cho từng loại |
+| **Chức năng** | Thêm/Sửa/Xóa loại cây; Cấu hình ngưỡng lý tưởng (nhiệt độ, độ ẩm, ánh sáng…) |
+| **Yêu cầu** | Thay đổi có hiệu lực ngay mà không cần triển khai lại hệ thống |
+
+**User Stories:**
+- Là admin, tôi muốn thêm loại cây mới vào hệ thống mà không cần sửa mã nguồn.
+- Là admin, tôi muốn chỉnh sửa ngưỡng lý tưởng cho loại cây khi cần tinh chỉnh.
+
+**Tiêu chí chấp nhận:**
+- [ ] Admin thêm/sửa/xóa loại cây thành công qua giao diện.
+- [ ] Thay đổi ngưỡng lý tưởng có hiệu lực ngay lập tức.
+
+---
+
+### F-12: Cấu hình Tu Vi & Cảnh Giới (EXP & Rank Configuration)
+
+| Mục | Nội dung |
+|---|---|
+| **Mô tả** | Cấu hình các tham số của hệ thống điểm và cảnh giới |
+| **Chức năng** | Cấu hình hệ số cộng/trừ Tu Vi theo mức môi trường; Cấu hình mốc Tu Vi cho từng Cảnh Giới |
+| **Yêu cầu** | Thay đổi có hiệu lực ngay mà không cần cập nhật mã nguồn |
+
+**User Stories:**
+- Là admin, tôi muốn điều chỉnh hệ số cộng/trừ điểm Tu Vi để cân bằng gameplay.
+- Là admin, tôi muốn thay đổi mốc Tu Vi cần thiết cho mỗi Cảnh Giới khi cần.
+
+**Tiêu chí chấp nhận:**
+- [ ] Admin cấu hình được hệ số Tu Vi và mốc Cảnh Giới qua giao diện.
+- [ ] Thay đổi có hiệu lực ngay mà không cần triển khai lại.
+� tả** | Giao diện tổng quan toàn hệ thống dành cho Admin |
 
 **Thông tin hiển thị:**
 
@@ -261,17 +262,15 @@
 | Mục | Nội dung |
 |---|---|
 | **Mô tả** | Quản lý vòng đời thiết bị: từ khi sản xuất đến khi tới tay người dùng |
-| **Chức năng Admin** | 1. **Tạo thiết bị mới:** Hệ thống tự sinh bộ ba: Plant Code, Device Secret & Verify Code.<br>2. **Quản lý danh sách:** Xem trạng thái, lần cuối gửi dữ liệu.<br>3. **Vô hiệu hóa:** Ngắt quyền truy cập của thiết bị lỗi/giả mạo |
-| **Quy trình** | Admin tạo bộ mã → Nạp (Code+Secret) vào FW → In (Code+Verify) lên nhãn → Giao cho người dùng |
+| **Chức năng Admin** | 1. **Tạo thiết bị mới:** Hệ thống tự sinh bộ đôi: Plant Code & Verify Code.<br>2. **Quản lý danh sách:** Xem trạng thái, lần cuối gửi dữ liệu. |
+| **Quy trình** | Admin tạo bộ mã → Nạp Plant Code vào FW → In (Code+Verify) lên nhãn → Giao cho người dùng |
 
 **User Stories:**
 - Là admin, tôi muốn tạo mã thiết bị mới để nạp vào firmware trước khi đóng gói sản phẩm.
 - Là admin, tôi muốn xem danh sách thiết bị và trạng thái kết nối để phát hiện thiết bị lỗi.
-- Là admin, tôi muốn vô hiệu hóa thiết bị bất thường để bảo vệ hệ thống.
 
 **Tiêu chí chấp nhận:**
 - [ ] Admin xem được danh sách thiết bị với trạng thái kết nối realtime.
-- [ ] Admin có thể vô hiệu hóa thiết bị, thiết bị bị vô hiệu hóa ngừng gửi dữ liệu.
 
 ---
 
@@ -340,10 +339,7 @@
 │  └───────────┘ └───────────┘ └───────────────┘ │
 │                                                │
 │  ┌─────────────────┐  ┌────────────────────┐   │
-│  │ Biểu đồ xu hướng│  │ Bảng xếp hạng      │   │
 │  └─────────────────┘  └────────────────────┘   │
-│                                                │
-│   Cảnh báo (nếu có)                            │
 └────────────────────────────────────────────────┘
 ```
 
@@ -417,9 +413,8 @@ Các tính năng sau **không** nằm trong phiên bản này:
 | **Tu Vi (EXP)** | Điểm kinh nghiệm tích lũy, phản ánh chất lượng chăm sóc cây theo thời gian |
 | **Cảnh Giới** | Cấp bậc (rank) của cây, được thăng cấp khi Tu Vi đạt đủ mốc |
 | **Đột phá** | Sự kiện cây chuyển từ Cảnh Giới hiện tại lên Cảnh Giới tiếp theo |
-| **Plant Code** | Mã định danh duy nhất (UID) in trên thiết bị, dùng để nhận diện chậu cây |
+| **Plant Code** | Mã định danh duy nhất (UID) in trên thiết bị, dùng để nhận diện và xác thực cho thiết bị |
 | **Verify Code** | Mã xác thực (PIN) in kèm Plant Code, dùng để chứng minh quyền sở hữu khi liên kết |
-| **Device Secret** | Khóa bí mật ẩn trong firmware, dùng để thiết bị tự xác thực với server |
 | **Dashboard** | Giao diện chính của ứng dụng, hiển thị trạng thái cây và các chỉ số |
 | **IoT** | Internet of Things — mạng lưới thiết bị vật lý kết nối Internet |
 | **Gamification** | Ứng dụng các yếu tố trò chơi vào hoạt động ngoài game để tăng động lực |
