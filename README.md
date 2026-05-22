@@ -56,3 +56,29 @@ Toàn bộ dự án được chia thành các phân hệ chính sau, mỗi thư 
 3. **Liên kết:** Nhập **Plant Code** và **Verify Code** được in trên thiết bị.
 4. **Tu luyện:** Chăm sóc cây thật tốt để đạt đến đỉnh cao Mộc Đạo!
 
+---
+
+## 🐳 Khởi chạy nhanh bằng Docker Compose
+
+Hệ thống đã được đóng gói hoàn chỉnh bằng Docker và Docker Compose. Bạn và bạn bè của bạn có thể khởi chạy toàn bộ Backend, Database PostgreSQL và MQTT Broker cực kỳ nhanh chóng chỉ với một lệnh duy nhất.
+
+### 1. Yêu cầu hệ thống
+* Đã cài đặt **Docker** và **Docker Compose**.
+
+### 2. Khởi chạy
+Tại thư mục gốc của dự án, chạy lệnh:
+```bash
+docker compose up --build
+```
+
+**Hệ thống sẽ tự động thực hiện:**
+1. Khởi động PostgreSQL Container (`moc-dao-db`) và thiết lập cơ sở dữ liệu.
+2. Khởi động Mosquitto MQTT Broker Container (`moc-dao-mqtt`) để kết nối IoT.
+3. Build Backend Container (`moc-dao-backend`) sử dụng công nghệ tối ưu hóa `uv`.
+4. Tự động chạy di chuyển dữ liệu (Alembic Migration) và nạp dữ liệu mẫu (Seed Data) ban đầu.
+5. Lắng nghe API tại cổng `http://localhost:8000`.
+
+### 3. Xem tài liệu API
+Sau khi chạy thành công, truy cập **`http://localhost:8000/docs`** trên trình duyệt để kiểm thử tất cả các API.
+
+

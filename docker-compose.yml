@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: moc-dao-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: moc_dao_tu_tien
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: moc-dao-mqtt
+    restart: always
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mqtt_config:/mosquitto/config
+      - mqtt_data:/mosquitto/data
+      - mqtt_log:/mosquitto/log
+    # Auto-generates configuration for anonymous connections on 1883
+    entrypoint: >
+      sh -c "
+      mkdir -p /mosquitto/config &&
+      echo 'listener 1883 0.0.0.0' > /mosquitto/config/mosquitto.conf &&
+      echo 'allow_anonymous true' >> /mosquitto/config/mosquitto.conf &&
+      exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
+      "
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: moc-dao-backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/moc_dao_tu_tien
+      - MQTT_BROKER_HOST=mqtt
+      - MQTT_BROKER_PORT=1883
+      - APP_ENV=production
+      - APP_DEBUG=false
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    entrypoint: >
+      sh -c "
+      alembic upgrade head &&
+      python seed.py &&
+      uvicorn main:app --host 0.0.0.0 --port 8000
+      "
+
+volumes:
+  postgres_data:
+  mqtt_config:
+  mqtt_data:
+  mqtt_log:
