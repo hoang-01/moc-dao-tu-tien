@@ -121,6 +121,8 @@ def decode_token(token: str) -> dict:
 
 async def get_user_by_id(db: AsyncSession, user_id: UUID) -> User | None:
     """Tìm user theo ID."""
-    stmt = select(User).where(User.id == user_id)
+    from sqlalchemy.orm import selectinload
+
+    stmt = select(User).options(selectinload(User.plant)).where(User.id == user_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()

@@ -27,10 +27,17 @@ Dự án áp dụng quy trình kiểm tra nghiêm ngặt thông qua các lệnh:
 - **Định dạng code**: `uv run ruff format .`
 - **Kiểm tra kiểu dữ liệu**: `uv run ty check .`
 
-### 3. Chạy Tests
-Tất cả các kiểm tra trên cũng được tích hợp vào bộ test:
+### 3. Chạy Tests & SQA Report
+Dự án được cấu hình sẵn file kịch bản SQA tự động để đánh giá chất lượng phần mềm (Linting + Testing Coverage).
+Để chạy và lấy minh chứng, chạy lệnh sau:
 ```bash
-uv run pytest
+chmod +x check_sqa.sh
+./check_sqa.sh
+```
+
+Hoặc chạy các lệnh thủ công:
+```bash
+uv run pytest --cov=app tests/
 ```
 
 ## 📂 Cấu trúc thư mục

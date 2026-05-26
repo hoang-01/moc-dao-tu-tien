@@ -56,9 +56,19 @@ async def create_permanent_device():
             res = await db.execute(stmt)
             existing_plant = res.scalar_one_or_none()
             if existing_plant:
-                await db.execute(delete(SensorReading).where(SensorReading.plant_id == existing_plant.id))
-                await db.execute(delete(ExpLog).where(ExpLog.plant_id == existing_plant.id))
-                await db.execute(delete(BreakthroughEvent).where(BreakthroughEvent.plant_id == existing_plant.id))
+                await db.execute(
+                    delete(SensorReading).where(
+                        SensorReading.plant_id == existing_plant.id
+                    )
+                )
+                await db.execute(
+                    delete(ExpLog).where(ExpLog.plant_id == existing_plant.id)
+                )
+                await db.execute(
+                    delete(BreakthroughEvent).where(
+                        BreakthroughEvent.plant_id == existing_plant.id
+                    )
+                )
                 await db.execute(delete(Plant).where(Plant.id == existing_plant.id))
             await db.execute(delete(Device).where(Device.id == existing_device.id))
             await db.flush()
@@ -91,7 +101,9 @@ async def create_permanent_device():
             plant_type = res.scalar_one_or_none()
 
         if not plant_type:
-            print("❌ Lỗi: Không tìm thấy loại cây nào trong DB! Hãy chạy seed.py trước.")
+            print(
+                "❌ Lỗi: Không tìm thấy loại cây nào trong DB! Hãy chạy seed.py trước."
+            )
             sys.exit(1)
 
         # 5. Lấy Cảnh Giới mặc định (Phàm Mộc)
@@ -99,7 +111,9 @@ async def create_permanent_device():
         res = await db.execute(stmt)
         default_rank = res.scalar_one_or_none()
         if not default_rank:
-            print("❌ Lỗi: Không tìm thấy cấu hình Cảnh Giới trong DB! Hãy chạy seed.py trước.")
+            print(
+                "❌ Lỗi: Không tìm thấy cấu hình Cảnh Giới trong DB! Hãy chạy seed.py trước."
+            )
             sys.exit(1)
 
         # 6. Tạo chậu cây và liên kết với User + Device
@@ -113,7 +127,9 @@ async def create_permanent_device():
         )
         db.add(plant)
         await db.commit()
-        print(f"  └ ✅ Tạo cây trồng và liên kết thành công: '{plant.name}' ({plant_type.name})")
+        print(
+            f"  └ ✅ Tạo cây trồng và liên kết thành công: '{plant.name}' ({plant_type.name})"
+        )
         print("\n🎉 THIẾT LẬP THÀNH CÔNG! Đạo hữu có thể khởi chạy bot giả lập ngay.")
 
 

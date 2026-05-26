@@ -21,6 +21,11 @@ dependencies = [
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=0.25.0",
+    "pytest-cov>=4.1.0",
     "ruff>=0.15.10",
     "ty>=0.0.30",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"

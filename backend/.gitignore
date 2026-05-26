@@ -155,3 +155,8 @@ cython_debug/
 
 # Ruff
 .ruff_cache/
+
+# OpenAPI
+openapi.json
+export_openapi.py
+
