@@ -19,18 +19,19 @@
  *
  * TELEMETRY LOOP (mỗi 60s):
  *   Đọc DHT22 → Đọc Soil → Đọc TSL2561
- *   → POST /api/devices/{plant_code}/telemetry
+ *   → MQTT Publish: devices/{plant_code}/telemetry
  *   → Hiển thị OLED
  *
  * Thư viện (platformio.ini):
  *   - ArduinoJson, DHT, Adafruit TSL2561, Adafruit SSD1306
  *   - WebServer (built-in ESP32), Preferences (built-in ESP32)
+ *   - PubSubClient (MQTT)
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include <HTTPClient.h>
+// HTTPClient removed — telemetry now sent via MQTT
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Wire.h>
@@ -45,12 +46,9 @@
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 unsigned long lastMqttRetry   = 0;
-bool          isWatering      = false;
-unsigned long waterStartTime   = 0;
-#define WATER_DURATION_MS     5000 // Thời gian tưới mặc định (5s)
 
 // ── Thời gian ─────────────────────────────────────────────────
-#define TELEMETRY_INTERVAL_MS  6000UL   // 60 giây
+#define TELEMETRY_INTERVAL_MS  60000UL  // 60 giây
 #define WIFI_MAX_RETRY         3          // Số lần thử kết nối WiFi
 #define WIFI_RETRY_DELAY_MS    10000      // Mỗi lần thử đợi tối đa 10s
 #define CONFIG_TIMEOUT_MS      300000UL  // Portal tự đóng sau 5 phút nếu không có ai vào
@@ -89,6 +87,11 @@ struct SensorData {
     float light;
 };
 
+// ── Gamification ──────────────────────────────────────────────
+int           cfg_total_exp = 0;
+String        cfg_rank_name = "Pham Moc";
+SensorData    lastSensors   = {0.0, 0.0, 0.0, 0.0};
+
 // =============================================================
 // OLED helpers
 // =============================================================
@@ -108,6 +111,71 @@ void oledShow(const char* line1, const char* line2 = "",
     oled.setCursor(0, 32); oled.println(line3);
     oled.setCursor(0, 48); oled.println(line4);
     oled.display();
+}
+
+// =============================================================
+// OLED: Vẽ màn hình Dashboard (Tu Vi + Cảnh Giới)
+// =============================================================
+void drawDashboard(unsigned long remainSecs) {
+    if (!oledOk) return;
+    oledClear();
+    oled.setTextSize(1);
+    
+    // Dòng 1: Code và đếm ngược
+    oled.setCursor(0, 0);
+    oled.printf("Code: %s (%lus)", cfg_plant_code.c_str(), remainSecs);
+    
+    // Dòng 2: Nhiệt độ & Độ ẩm không khí
+    char buf[32];
+    oled.setCursor(0, 13);
+    snprintf(buf, sizeof(buf), "T:%.1fC  H:%.1f%%", lastSensors.temperature, lastSensors.humidity);
+    oled.println(buf);
+    
+    // Dòng 3: Độ ẩm đất & Ánh sáng
+    oled.setCursor(0, 25);
+    snprintf(buf, sizeof(buf), "Dat:%.0f%%  L:%.0flx", lastSensors.soilMoisture, lastSensors.light);
+    oled.println(buf);
+    
+    // Dòng 4: Tu Vi
+    oled.setCursor(0, 39);
+    snprintf(buf, sizeof(buf), "Tu Vi: %d EXP", cfg_total_exp);
+    oled.println(buf);
+    
+    // Dòng 5: Cảnh Giới
+    oled.setCursor(0, 51);
+    snprintf(buf, sizeof(buf), "Rank: %s", cfg_rank_name.c_str());
+    oled.println(buf);
+    
+    oled.display();
+}
+
+// =============================================================
+// MQTT: Callback nhận kết quả Tu Vi/Cảnh Giới từ Broker
+// =============================================================
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    String incomingTopic = String(topic);
+    Serial.printf("[MQTT] Nhan message tu topic: %s\n", topic);
+
+    String responseTopic = "devices/" + cfg_plant_code + "/response";
+    if (incomingTopic == responseTopic) {
+        StaticJsonDocument<256> doc;
+        DeserializationError error = deserializeJson(doc, payload, length);
+        if (error) {
+            Serial.printf("[MQTT] Parse JSON response that bai: %s\n", error.c_str());
+            return;
+        }
+
+        if (doc.containsKey("total_exp")) {
+            cfg_total_exp = doc["total_exp"].as<int>();
+        }
+        if (doc.containsKey("rank_name")) {
+            cfg_rank_name = doc["rank_name"].as<String>();
+        }
+        Serial.printf("[MQTT] Cap nhat -> EXP: %d, Rank: %s\n", cfg_total_exp, cfg_rank_name.c_str());
+        
+        // Vẽ lại màn hình với Tu Vi & Cảnh Giới mới nhận được
+        drawDashboard(0);
+    }
 }
 
 // =============================================================
@@ -314,54 +382,7 @@ String getMqttHost(String url) {
     return host;
 }
 
-// =============================================================
-// MQTT: Callback nhận tín hiệu từ Broker
-// =============================================================
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    Serial.printf("[MQTT] Nhan tin tu topic: %s\n", topic);
-    
-    String msg = "";
-    for (unsigned int i = 0; i < length; i++) {
-        msg += (char)payload[i];
-    }
-    Serial.printf("[MQTT] Payload: %s\n", msg.c_str());
 
-    // Parse JSON command
-    StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, msg);
-    
-    String command = "";
-    int duration = WATER_DURATION_MS / 1000;
-
-    if (!error) {
-        command = doc["command"].as<String>();
-        if (doc.containsKey("duration")) {
-            duration = doc["duration"].as<int>();
-        }
-    } else {
-        command = msg;
-    }
-
-    if (command == "water" || command == "tuoi_nuoc") {
-        Serial.printf("[MQTT] KICH HOAT VOI NUOC TRONG %d GIAY!\n", duration);
-        isWatering = true;
-        waterStartTime = millis();
-
-        // OLED feedback
-        oledClear();
-        oled.setTextSize(2);
-        oled.setCursor(0, 4);
-        oled.println("💧 DANG TUOI");
-        oled.setTextSize(1);
-        oled.setCursor(0, 26);
-        oled.printf("Moc Dao: %s\n", cfg_plant_code.c_str());
-        oled.setCursor(0, 38);
-        oled.printf("Thoi gian: %ds\n", duration);
-        oled.setCursor(0, 50);
-        oled.println("Relay: [ ON ]");
-        oled.display();
-    }
-}
 
 // =============================================================
 // MQTT: Kết nối Broker song song (Non-blocking)
@@ -382,7 +403,7 @@ void connectMQTT() {
 
     String clientId = "MocDaoDevice-" + cfg_plant_code;
     String statusTopic = "devices/" + cfg_plant_code + "/status";
-    String controlTopic = "devices/" + cfg_plant_code + "/control";
+    String responseTopic = "devices/" + cfg_plant_code + "/response";
 
     // LWT (Last Will and Testament) set to "offline"
     bool connected = mqttClient.connect(
@@ -396,8 +417,8 @@ void connectMQTT() {
     if (connected) {
         Serial.println("[MQTT] KET NOI BROKER OK!");
         mqttClient.publish(statusTopic.c_str(), "online", true);
-        mqttClient.subscribe(controlTopic.c_str(), 1);
-        Serial.printf("[MQTT] Subscribed: %s\n", controlTopic.c_str());
+        mqttClient.subscribe(responseTopic.c_str(), 1);
+        Serial.printf("[MQTT] Subscribed to response: %s\n", responseTopic.c_str());
     } else {
         Serial.printf("[MQTT] Ket noi failure, rc=%d\n", mqttClient.state());
     }
@@ -488,23 +509,29 @@ SensorData readSensors() {
 }
 
 // =============================================================
-// HTTP: Gửi telemetry
+// MQTT: Gửi telemetry
 // =============================================================
 void sendTelemetry() {
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[HTTP] Mat WiFi!");
+        Serial.println("[MQTT] Mat WiFi!");
         oledShow("Mat WiFi!", "Dang thu lai...");
         connectWiFiOrConfig();
+        return;
+    }
+
+    if (!mqttClient.connected()) {
+        Serial.println("[MQTT] Chua ket noi Broker, bo qua gui.");
+        oledShow("MQTT mat ket noi!", "Dang thu lai...");
         return;
     }
 
     // Đọc cảm biến
     SensorData sensors = readSensors();
 
-    // Xây URL
-    String url = cfg_server + "/api/devices/" + cfg_plant_code + "/telemetry";
+    // Topic
+    String telemetryTopic = "devices/" + cfg_plant_code + "/telemetry";
 
-    // JSON payload đúng chuẩn backend
+    // JSON payload đúng chuẩn backend: {"sensors": [{key, value}...]}
     StaticJsonDocument<400> doc;
     JsonArray arr = doc.createNestedArray("sensors");
 
@@ -523,77 +550,30 @@ void sendTelemetry() {
     String payload;
     serializeJson(doc, payload);
 
-    // POST request
-    HTTPClient http;
-    http.begin(url);
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("X-Plant-Code", cfg_plant_code);
-    http.setTimeout(10000);
+    // MQTT Publish
+    bool ok = mqttClient.publish(
+        telemetryTopic.c_str(),
+        payload.c_str(),
+        false   // retain = false cho telemetry
+    );
 
-    int code = http.POST(payload);
-    Serial.printf("[HTTP] %d | URL: %s\n", code, url.c_str());
+    if (ok) {
+        Serial.printf("[MQTT] Telemetry sent → %s\n", telemetryTopic.c_str());
+        Serial.printf("[MQTT] Payload: %s\n", payload.c_str());
 
-    if (code == 200) {
-        String body = http.getString();
-        StaticJsonDocument<256> resp;
-        if (!deserializeJson(resp, body)) {
-            bool   expAwarded = resp["exp_awarded"].as<bool>();
-            String message    = resp["message"].as<String>();
-
-            // Trích quality từ message: "Xử lý thành công. Chất lượng: GOOD"
-            String quality = "FAIR";
-            int idx = message.indexOf("Chất lượng: ");
-            if (idx < 0) idx = message.indexOf("Chat luong: ");
-            if (idx >= 0) {
-                quality = message.substring(idx + 12);
-                quality.trim();
-            }
-
-            Serial.printf("[HTTP] OK | quality=%s exp=%d\n",
-                          quality.c_str(), expAwarded);
-
-            // Hiển thị OLED kết quả
-            oledClear();
-            oled.setTextSize(2);
-            oled.setCursor(0, 0);
-            oled.println(quality);           // GOOD / EXCELLENT...
-
-            oled.setTextSize(1);
-            oled.setCursor(0, 22);
-            oled.println(expAwarded ? "+Tu Vi!" : "Anti-spam...");
-
-            oled.setCursor(0, 36);
-            char buf[22];
-            snprintf(buf, sizeof(buf), "T:%.0fC H:%.0f%%",
-                     sensors.temperature, sensors.humidity);
-            oled.println(buf);
-
-            oled.setCursor(0, 48);
-            snprintf(buf, sizeof(buf), "Dat:%.0f%% L:%.0flux",
-                     sensors.soilMoisture, sensors.light);
-            oled.println(buf);
-            oled.display();
-        }
-    } else if (code == 403) {
-        Serial.println("[HTTP] 403: Plant Code sai!");
-        oledShow("Loi 403!", "Plant Code sai!", cfg_plant_code.c_str(),
-                 "Vao 192.168.4.1");
-    } else if (code == 400) {
-        Serial.println("[HTTP] 400: " + http.getString());
-        oledShow("Loi 400!", "Data khong hop le");
+        lastSensors = sensors;
+        drawDashboard(0);
     } else {
-        String errStr = http.errorToString(code);
-        Serial.printf("[HTTP] Loi (%d): %s\n", code, errStr.c_str());
-        oledShow("Loi ket noi!", ("Code: " + String(code)).c_str(), errStr.c_str());
+        Serial.println("[MQTT] Publish that bai!");
+        oledShow("MQTT Publish loi!", telemetryTopic.c_str());
     }
-
-    http.end();
 }
 
 // =============================================================
 // SETUP
 // =============================================================
 void setup() {
+    setCpuFrequencyMhz(80); // Hạ xung nhịp xuống 80MHz giúp giảm nhiệt độ đáng kể
     Serial.begin(115200);
     Serial.println("\n\n[Boot] Moc Dao Tu Tien v2.0 khoi dong...");
 
@@ -631,6 +611,9 @@ void setup() {
     } else {
         // Có config → thử kết nối WiFi
         connectWiFiOrConfig();
+        if (WiFi.status() == WL_CONNECTED) {
+            lastSensors = readSensors();
+        }
     }
 }
 
@@ -648,19 +631,6 @@ void loop() {
     connectMQTT();
     mqttClient.loop();
 
-    // ── Xử lý tưới nước bất đồng bộ ───────────────────────────
-    if (isWatering) {
-        if (millis() - waterStartTime >= WATER_DURATION_MS) {
-            isWatering = false;
-            Serial.println("[MQTT] TUOI NUOC HOAN THANH!");
-            // Quay lại màn hình telemetry ở vòng lặp sau
-        } else {
-            // Dừng hiển thị đếm ngược khi đang tưới nước
-            delay(100);
-            return;
-        }
-    }
-
     // ── Telemetry Mode ────────────────────────────────────────
     unsigned long now = millis();
 
@@ -673,14 +643,7 @@ void loop() {
             static unsigned long lastOledUpdate = 0;
             if (now - lastOledUpdate >= 1000) {
                 lastOledUpdate = now;
-                oledClear();
-                oled.setTextSize(1);
-                oled.setCursor(0, 0);  oled.println("Moc Dao Tu Tien");
-                oled.setCursor(0, 14); oled.printf("Code: %s", cfg_plant_code.c_str());
-                oled.setCursor(0, 28); oled.printf("Cho: %lus...", remain);
-                oled.setCursor(0, 42); oled.printf("WiFi: %s",
-                    WiFi.status() == WL_CONNECTED ? "OK" : "MAT");
-                oled.display();
+                drawDashboard(remain);
             }
         }
         delay(100);
