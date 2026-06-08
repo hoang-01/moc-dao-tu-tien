@@ -1,37 +1,28 @@
 # 📂 Firmware - Mộc Đạo Tu Tiên (ESP32)
 
-Thư mục này chứa mã nguồn thiết bị IoT (Firmware) của dự án **Mộc Đạo Tu Tiên**. Thiết bị được lập trình trên vi điều khiển ESP32, sử dụng kiến trúc lai song song **HTTP (REST API) + MQTT (Broker)** để mang lại trải nghiệm tối ưu nhất cho người dùng.
+Thư mục này chứa mã nguồn thiết bị IoT (Firmware) của dự án **Mộc Đạo Tu Tiên**. Thiết bị được lập trình trên vi điều khiển ESP32, sử dụng giao thức **MQTT (Broker)** để mang lại trải nghiệm thời gian thực tối ưu nhất cho người dùng và luồng giám sát cảnh giới Tu Tiên ảo diệu.
 
 ---
 
-## 🏗 Kiến trúc & Luồng hoạt động (Hybrid Architecture)
+## 🏗 Kiến trúc & Luồng hoạt động
 
 Hệ thống tuân thủ mô hình **Thin IoT Client + Smart Backend**:
-*   **HTTP POST (Đồng bộ - Telemetry & Gamification)**:
-    *   Mỗi **60 giây** (không chặn - `millis()`), ESP32 gửi dữ liệu cảm biến lên endpoint:
-        `POST /api/devices/{plant_code}/telemetry`
-        Header: `X-Plant-Code: {plant_code}`
-    *   Nhận phản hồi đồng bộ tức thì chứa thông tin Tu Vi được cộng (`exp_awarded`) và trạng thái môi trường để hiển thị lập tức lên màn hình OLED với độ trễ bằng 0.
-*   **MQTT (Bất đồng bộ - Trạng thái & Điều khiển)**:
-    *   Kết nối nền TCP siêu nhẹ duy trì liên tục với MQTT Broker (Cổng `1883`).
-    *   **LWT (Last Will and Testament)**: Đăng ký di chúc `"offline"` tại topic `devices/{plant_code}/status`. Khi kết nối thành công, mạch báo `"online"`. Giúp Web Dashboard cập nhật trạng thái kết nối tức thì.
-    *   **Điều khiển từ xa**: Subscribe lắng nghe trên topic `devices/{plant_code}/control`. Khi nhận được lệnh `"water"` hoặc `"tuoi_nuoc"`, mạch lập tức bật bơm tưới nước và kích hoạt hiệu ứng OLED mà không cần chờ đợi hay gửi HTTP polling liên tục.
+*   **Gửi Dữ Liệu (Telemetry - Uplink)**: Mỗi 60 giây, ESP32 thu thập thông số môi trường (Nhiệt độ, Độ ẩm không khí, Độ ẩm đất, Ánh sáng) và đẩy bản tin JSON siêu nhẹ qua MQTT tới topic `devices/{plant_code}/telemetry`. 
+*   **Nhận Phản Hồi (Game State - Downlink)**: Lắng nghe liên tục trên topic `devices/{plant_code}/response`. Ngay khi Backend tính toán xong điểm kinh nghiệm (EXP) và cảnh giới Tu Tiên, mạch sẽ nhận và biến đổi giao diện màn hình OLED lập tức.
+*   **LWT (Last Will and Testament)**: Đăng ký mạng tự động. Khi mất điện hoặc rớt mạng lưới, cấu hình LWT `"offline"` tự động kích hoạt trên máy chủ, đồng bộ tức thời với Web Dashboard bảo vệ tính minh bạch của thiết bị.
 
 ---
 
 ## 🧩 Phần cứng & Sơ đồ chân (Pinout)
 
-**Vi điều khiển:** ESP32 WROOM 32 (hoặc tương thích)
+**Vi điều khiển:** ESP32 WROOM 32 / ESP32-S3 (hoặc tương thích)
 
 | Linh kiện | Giao tiếp | Chân trên linh kiện | Chân trên ESP32 | Ghi chú |
 | :--- | :--- | :--- | :--- | :--- |
 | **OLED SSD1306 0.96"** | I2C | VCC <br> GND <br> SCL <br> SDA | 3.3V <br> GND <br> **GPIO 22** <br> **GPIO 21** | Hiển thị Tu Vi, Cảnh Giới và trạng thái tưới |
 | **Cảm biến Ánh sáng (TSL2561)** | I2C | VCC <br> GND <br> SCL <br> SDA | 3.3V <br> GND <br> **GPIO 22** <br> **GPIO 21** | Dùng chung đường bus I2C với màn hình OLED |
-| **Cảm biến Độ ẩm đất** | Analog | VCC <br> GND <br> AOUT (SIG) | 3.3V <br> GND <br> **GPIO 34** | Đọc ADC (0 - 100%). Cực kỳ an toàn khi dùng chung WiFi |
-| **Cảm biến Nhiệt/Ẩm (DHT22)** | Digital | VCC (+) <br> GND (-) <br> DATA (OUT) | 3.3V <br> GND <br> **GPIO 4** | Cảm biến môi trường không khí |
-
-> [!NOTE]
-> Nên sử dụng cảm biến độ ẩm đất **điện dung (Capacitive)** để tránh bị ăn mòn kim loại khi cắm lâu trong đất ẩm.
+| **Cảm biến Độ ẩm đất** | Analog | VCC <br> GND <br> AOUT (SIG) | 3.3V <br> GND <br> **GPIO 34** | Đọc ADC (0 - 100%). _Nên sử dụng loại cảm biến Điện dung (Capacitive) chống ăn mòn._ |
+| **Cảm biến Nhiệt/Ẩm (DHT22)** | Digital | VCC (+) <br> GND (-) <br> DATA (OUT) | 3.3V <br> GND <br> **GPIO 4** | Cảm biến môi trường không khí chuẩn xác cao |
 
 ---
 
@@ -40,45 +31,25 @@ Hệ thống tuân thủ mô hình **Thin IoT Client + Smart Backend**:
 ### Bước 1: Chuẩn bị Môi trường
 1. Cài đặt **Visual Studio Code** và extension **PlatformIO IDE**.
 2. Chọn `File` ➔ `Open Folder...` ➔ Chọn thư mục `firmware` (nơi chứa file `platformio.ini`).
-3. PlatformIO sẽ tự động tải các thư viện khai báo (bao gồm `ArduinoJson`, `PubSubClient`, và các thư viện cảm biến Adafruit).
+3. PlatformIO sẽ tự động tải các thư viện khai báo (bao gồm `ArduinoJson`, `PubSubClient`, và các thư viện hỗ trợ phần cứng).
 
-### Bước 2: Cấu hình Fallback (`src/secrets.h`)
-Mở file `src/secrets.h` và sửa các thông tin mặc định:
-*   `WIFI_SSID` & `WIFI_PASS`: WiFi dùng để test.
-*   `SERVER_HOST`: IP máy tính của bạn (VD: `http://192.168.1.33:8000`). Mạch sẽ tự động tách IP này để kết nối cả HTTP (cổng 8000) và MQTT Broker (cổng 1883).
-
-### Bước 3: Nạp Code
-1. Cắm ESP32 vào máy tính qua cáp USB.
-2. Bấm nút **Upload (Mũi tên `→` ở thanh trạng thái dưới cùng)** để biên dịch và nạp code.
-3. Bấm nút **Serial Monitor (Biểu tượng phích cắm `🔌`)** với baudrate `115200` để xem log.
+### Bước 2: Nạp Code
+1. Cắm cáp Micro-USB / Type-C nối ESP32 với máy tính.
+2. Bấm nút **Upload (Mũi tên `→` ở thanh trạng thái màn hình)** để biên dịch và nạp code xuống mạch.
+3. Bấm **Serial Monitor (Biểu tượng phích cắm `🔌`)** (Baudrate `115200`) để quan sát luồng khởi động.
 
 ---
 
-## 📱 Cấu hình thiết bị không cần sửa code (Smart Web Portal)
+## 📱 Khởi tạo thiết bị (Smart Auto-Provisioning Web Portal)
 
-Khi mua thiết bị hoặc mang thiết bị sang môi trường WiFi mới, người dùng không cần sửa code nạp lại:
+Khi triển khai thực tế (Production Deploy) sang môi trường mạng mới, hệ thống áp dụng kỹ thuật Smart Provisioning không cần sửa mã nguồn (Zero-Touch Provisioning):
 
-1. **Khởi chạy Web Portal**: Nếu ESP32 không thể kết nối tới WiFi đã cấu hình sau 3 lần thử (hoặc lần đầu khởi động), mạch sẽ tự động bật điểm thu phát WiFi AP tên là **`MocDao-XXXXXX`** (không có mật khẩu) và màn hình OLED hiển thị hướng dẫn.
+1. **Khởi chạy Web Portal**: Lần đầu cấp nguồn, nếu ESP32 không tìm thấy mạng nội bộ đã cấu hình, mạch tự động bật điểm thu phát WiFi AP tên là **`MocDao-XXXXXX`** (Không yêu cầu mật khẩu kết nối).
 2. **Truy cập Giao diện cấu hình**: 
-   * Dùng điện thoại kết nối vào WiFi **`MocDao-XXXXXX`**.
-   * Mở trình duyệt web bất kỳ truy cập vào địa chỉ IP: `192.168.4.1`.
-3. **Nhập cấu hình**:
-   * **WiFi SSID**: Tên WiFi nhà bạn.
-   * **WiFi Password**: Mật khẩu WiFi.
-   * **Plant Code**: Mã định danh duy nhất của chậu cây lấy từ Dashboard Admin trên Web App sau khi tạo chậu cây mới.
-4. **Lưu & Khởi động**: Nhấn **Lưu & Khởi động lại**. Thiết bị ghi dữ liệu vào bộ nhớ flash vĩnh viễn (NVS), tự khởi động lại và kết nối vào mạng sử dụng thông tin mới ngay lập tức.
-
----
-
-## 📡 Chạy Thử và Test Offline (Mock Server)
-
-Khi Backend thật chưa sẵn sàng hoặc bạn đang kiểm tra offline, bạn có thể sử dụng Mock Server giả lập có sẵn:
-
-1. Mở terminal trên máy tính của bạn:
-   ```powershell
-   cd firmware/src
-   python mock_server.py
-   ```
-2. Điền chính xác IP máy tính của bạn vào `SERVER_HOST` trong `secrets.h` rồi nạp code.
-3. Theo dõi log trên terminal `mock_server.py`. Bạn sẽ thấy mạch ESP32 gửi dữ liệu đều đặn, đồng thời Mock Server sẽ trả về các đánh giá môi trường giả lập (Excellent, Good, Fair, Poor) và phân bổ EXP ngẫu nhiên để màn hình OLED hiển thị.
-4. Để test MQTT bất đồng bộ, sử dụng công cụ như MQTTX publish lệnh `{"command": "water", "duration": 5}` vào topic `devices/{plant_code}/control` để thấy OLED báo tưới nước tức thì!
+   * Dùng điện thoại thông minh kết nối vào WiFi AP **`MocDao-XXXXXX`**.
+   * Mở trình duyệt web truy cập tự động vào địa chỉ Gateway: `192.168.4.1`.
+3. **Nhập cấu hình Đồng bộ**:
+   * **WiFi SSID / Password**: Mạng nội bộ nơi đặt cấu hình.
+   * **Plant Code**: Mã định danh thiết bị duy nhất lấy từ Control Panel Admin (Dashboard Web).
+   * **Mã Bảo Mật (Verify Code)**: Khóa xác thực phần cứng chống thiết bị lạ đính kèm vào hệ thống.
+4. **Lưu & Khởi động**: Nhấn gửi. Thiết bị nạp thẳng bản ghi vào bộ nhớ Flash (NVS), bảo vệ dữ liệu xuyên suốt các chu kỳ mất điện, tự tắt Portal và hòa mạng chính thức. Trang bị sẵn tính năng Auto-Reconnect quét kết nối khi đứt cáp viễn thông.

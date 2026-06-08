@@ -48,7 +48,9 @@ PubSubClient mqttClient(espClient);
 unsigned long lastMqttRetry   = 0;
 
 // ── Thời gian ─────────────────────────────────────────────────
-#define TELEMETRY_INTERVAL_MS  60000UL  // 60 giây
+#ifndef TELEMETRY_INTERVAL_MS
+#define TELEMETRY_INTERVAL_MS  60000UL  // 60 giây (override trong secrets.h để test nhanh)
+#endif
 #define WIFI_MAX_RETRY         3          // Số lần thử kết nối WiFi
 #define WIFI_RETRY_DELAY_MS    10000      // Mỗi lần thử đợi tối đa 10s
 #define CONFIG_TIMEOUT_MS      300000UL  // Portal tự đóng sau 5 phút nếu không có ai vào
@@ -73,6 +75,7 @@ WebServer configServer(80);
 String cfg_ssid       = "";
 String cfg_pass       = "";
 String cfg_plant_code = "";
+String cfg_verify_code = "";
 String cfg_server     = SERVER_HOST; // Sử dụng SERVER_HOST định nghĩa trong secrets.h
 
 // ── Biến trạng thái ───────────────────────────────────────────
@@ -114,37 +117,96 @@ void oledShow(const char* line1, const char* line2 = "",
 }
 
 // =============================================================
+// Logic Gamification: Hàm tính mốc EXP kế tiếp
+// =============================================================
+int getNextRankExp(int current_exp) {
+    if (current_exp < 100) return 100;      // Luyện Khí
+    if (current_exp < 500) return 500;      // Trúc Cơ
+    if (current_exp < 1500) return 1500;    // Kim Đan
+    if (current_exp < 4000) return 4000;    // Nguyên Anh
+    if (current_exp < 8000) return 8000;    // Hóa Thần
+    if (current_exp < 15000) return 15000;  // Đại Thừa
+    if (current_exp < 30000) return 30000;  // Độ Kiếp
+    return 30000; // Đã đạt đỉnh
+}
+
+// =============================================================
+// Logic Gamification: Lấy Trạng Thái Linh Khí
+// =============================================================
+String getLinhKhiState(float soil, float temp) {
+    // Xử lý các mã lỗi phần cứng từ readSensors()
+    if (temp == -999.0) return "Loi: Mat ket noi DHT!"; 
+    if (temp == -998.0) return "Loi: DHT Du lieu rac!";
+    if (temp == -997.0) return "Loi: Nhiet do nhay vot!";
+    if (soil == -999.0) return "Loi: Cam bien dat!";
+
+    if (temp > 40.0 || soil <= 5.0) return "Tau hoa nhap ma!"; // DANGER
+    if (soil >= 60.0) return "Linh khi doi dao"; // EXCELLENT
+    if (soil >= 40.0) return "Dang phat trien"; // GOOD
+    if (soil >= 20.0) return "Tinh lang tu luyen"; // FAIR
+    return "Linh khi suy kiet"; // POOR
+}
+
+// =============================================================
 // OLED: Vẽ màn hình Dashboard (Tu Vi + Cảnh Giới)
 // =============================================================
 void drawDashboard(unsigned long remainSecs) {
     if (!oledOk) return;
     oledClear();
     oled.setTextSize(1);
+    oled.setTextWrap(false); // Ép không cho tự động rớt chữ M xuống dòng
     
-    // Dòng 1: Code và đếm ngược
+    // Dòng 1: Code và đếm ngược + Icon
     oled.setCursor(0, 0);
-    oled.printf("Code: %s (%lus)", cfg_plant_code.c_str(), remainSecs);
+    // Rút gọn chữ P và V để tiết kiệm diện tích (Bỏ dấu 2 chấm)
+    oled.printf("P%s V%s", cfg_plant_code.c_str(), cfg_verify_code.c_str());
     
-    // Dòng 2: Nhiệt độ & Độ ẩm không khí
+    // Icon WiFi và MQTT ở góc phải (Chỉ dùng 1 ký tự W và M)
+    if (WiFi.status() == WL_CONNECTED) {
+        oled.setCursor(110, 0); oled.print("W");
+    }
+    if (mqttClient.connected()) {
+        oled.setCursor(120, 0); oled.print("M");
+    }
+    
+    oled.setTextWrap(true); // Trả lại bình thường cho các dòng dưới
+    // Dòng 2: Chỉ số cảm biến (chia 2 cột nhỏ)
     char buf[32];
-    oled.setCursor(0, 13);
-    snprintf(buf, sizeof(buf), "T:%.1fC  H:%.1f%%", lastSensors.temperature, lastSensors.humidity);
+    oled.setCursor(0, 11);
+    if (lastSensors.temperature <= -997.0) {
+        snprintf(buf, sizeof(buf), "T: ERR  H: ERR");
+    } else {
+        snprintf(buf, sizeof(buf), "T:%.1fC H:%.1f%%", lastSensors.temperature, lastSensors.humidity);
+    }
     oled.println(buf);
     
-    // Dòng 3: Độ ẩm đất & Ánh sáng
-    oled.setCursor(0, 25);
-    snprintf(buf, sizeof(buf), "Dat:%.0f%%  L:%.0flx", lastSensors.soilMoisture, lastSensors.light);
+    oled.setCursor(0, 21);
+    if (lastSensors.soilMoisture == -999.0) {
+        snprintf(buf, sizeof(buf), "Dat: ERR L:%.0flx", lastSensors.light);
+    } else {
+        snprintf(buf, sizeof(buf), "Dat:%.0f%% L:%.0flx", lastSensors.soilMoisture, lastSensors.light);
+    }
     oled.println(buf);
     
-    // Dòng 4: Tu Vi
-    oled.setCursor(0, 39);
-    snprintf(buf, sizeof(buf), "Tu Vi: %d EXP", cfg_total_exp);
+    // Dòng 3: Trạng Thái Linh Khí
+    oled.setCursor(0, 33);
+    oled.print("TT: ");
+    oled.println(getLinhKhiState(lastSensors.soilMoisture, lastSensors.temperature));
+    
+    // Dòng 4: Cảnh Giới và EXP
+    oled.setCursor(0, 45);
+    snprintf(buf, sizeof(buf), "%s: %d", cfg_rank_name.c_str(), cfg_total_exp);
     oled.println(buf);
     
-    // Dòng 5: Cảnh Giới
-    oled.setCursor(0, 51);
-    snprintf(buf, sizeof(buf), "Rank: %s", cfg_rank_name.c_str());
-    oled.println(buf);
+    // Dòng 5: Progress Bar Tu Vi
+    int nextExp = getNextRankExp(cfg_total_exp);
+    float progress = (float)cfg_total_exp / nextExp;
+    if (progress > 1.0) progress = 1.0;
+    int barWidth = (int)(progress * 128);
+    
+    // Vẽ khung thanh tiến trình ở đáy màn hình
+    oled.drawRect(0, 56, 128, 8, SSD1306_WHITE);
+    oled.fillRect(0, 56, barWidth, 8, SSD1306_WHITE);
     
     oled.display();
 }
@@ -185,12 +247,15 @@ bool loadConfig() {
     prefs.begin("mocdao", true);
     cfg_ssid       = prefs.getString("ssid", "");
     cfg_pass       = prefs.getString("pass", "");
-    cfg_plant_code = prefs.getString("plant_code", "");
+    cfg_verify_code = prefs.getString("verify_code", "");
     prefs.end();
 
-    bool hasConfig = (cfg_ssid.length() > 0 && cfg_plant_code.length() >= 6);
-    Serial.printf("[NVS] SSID='%s' PlantCode='%s'\n",
-                  cfg_ssid.c_str(), cfg_plant_code.c_str());
+    // Dùng mã Plant Code đã nạp cứng vào firmware khi sản xuất
+    cfg_plant_code = DEFAULT_PLANT_CODE;
+
+    bool hasConfig = (cfg_ssid.length() > 0 && cfg_verify_code.length() >= 4);
+    Serial.printf("[NVS] SSID='%s' PlantCode='%s' VerifyCode='%s'\n",
+                  cfg_ssid.c_str(), cfg_plant_code.c_str(), cfg_verify_code.c_str());
     Serial.printf("[NVS] Config %s\n", hasConfig ? "OK" : "CHUA CO");
     return hasConfig;
 }
@@ -198,12 +263,11 @@ bool loadConfig() {
 // =============================================================
 // NVS: Lưu cấu hình
 // =============================================================
-void saveConfig(const String& ssid, const String& pass,
-                const String& plant_code) {
+void saveConfig(const String& ssid, const String& pass, const String& verify_code) {
     prefs.begin("mocdao", false);
     prefs.putString("ssid",       ssid);
     prefs.putString("pass",       pass);
-    prefs.putString("plant_code", plant_code);
+    prefs.putString("verify_code", verify_code);
     prefs.end();
     Serial.println("[NVS] Da luu config!");
 }
@@ -256,8 +320,11 @@ const char CONFIG_HTML[] PROGMEM = R"rawhtml(
     <label>WiFi Password</label>
     <input name="pass" type="password" placeholder="Mat khau WiFi">
 
-    <label>Plant Code</label>
-    <input name="plant_code" type="text" placeholder="VD: A7B3F2K9"
+    <label>Plant Code (Ma thiet bi)</label>
+    <div style="padding: 10px; background: #0f3460; color: #4ecca3; border-radius: 8px; font-weight: bold; text-align: center;">{PLANT_CODE}</div>
+           
+    <label>Verify Code (Ma xac thuc)</label>
+    <input name="verify_code" type="text" placeholder="VD: 123456"
            maxlength="16" required>
     <div class="note">Lay tu Admin Dashboard → Tao thiet bi</div>
 
@@ -296,22 +363,24 @@ const char SAVED_HTML[] PROGMEM = R"rawhtml(
 // CONFIG MODE: Handlers web server
 // =============================================================
 void handleConfigRoot() {
-    configServer.send_P(200, "text/html", CONFIG_HTML);
+    String html = FPSTR(CONFIG_HTML);
+    html.replace("{PLANT_CODE}", DEFAULT_PLANT_CODE);
+    configServer.send(200, "text/html", html);
 }
 
 void handleConfigSave() {
     String ssid       = configServer.arg("ssid");
     String pass       = configServer.arg("pass");
-    String plant_code = configServer.arg("plant_code");
+    String verify_code = configServer.arg("verify_code");
 
     // Validate cơ bản
-    if (ssid.length() == 0 || plant_code.length() < 6) {
-        configServer.send(400, "text/plain", "Thieu SSID hoac Plant Code!");
+    if (ssid.length() == 0 || verify_code.length() < 4) {
+        configServer.send(400, "text/plain", "Thieu SSID hoac Verify Code!");
         return;
     }
 
     // Lưu NVS
-    saveConfig(ssid, pass, plant_code);
+    saveConfig(ssid, pass, verify_code);
 
     // Trả HTML xác nhận
     configServer.send_P(200, "text/html", SAVED_HTML);
@@ -401,7 +470,8 @@ void connectMQTT() {
     mqttClient.setServer(host.c_str(), MQTT_PORT);
     mqttClient.setCallback(mqttCallback);
 
-    String clientId = "MocDaoDevice-" + cfg_plant_code;
+    // BẮT BUỘC: Thêm số random vào Client ID để không bị Broker đá văng khi dùng Public Server
+    String clientId = "MocDaoDevice-" + cfg_plant_code + "-" + String(random(1000, 9999));
     String statusTopic = "devices/" + cfg_plant_code + "/status";
     String responseTopic = "devices/" + cfg_plant_code + "/response";
 
@@ -482,21 +552,44 @@ void connectWiFiOrConfig() {
 }
 
 // =============================================================
-// Cảm biến: Đọc tất cả
+// Cảm biến: Đọc tất cả (Bao gồm bộ lọc nhiễu Data Validation)
 // =============================================================
 SensorData readSensors() {
     SensorData data;
 
-    // DHT22
-    data.temperature = dht.readTemperature();
-    data.humidity    = dht.readHumidity();
-    if (isnan(data.temperature)) { data.temperature = 0.0; }
-    if (isnan(data.humidity))    { data.humidity    = 0.0; }
+    // Đọc DHT22 thô
+    float new_temp = dht.readTemperature();
+    float new_hum  = dht.readHumidity();
+
+    // 1. Kiểm tra Mất kết nối / Đứt dây (NaN) -> Test Case 11
+    if (isnan(new_temp) || isnan(new_hum)) { 
+        data.temperature = -999.0; 
+        data.humidity    = -999.0;
+    } 
+    // 2. Kiểm tra Ngưỡng Vật lý (Out of Range) -> Test Case 7
+    else if (new_temp < -20.0 || new_temp > 80.0 || new_hum < 0.0 || new_hum > 100.0) {
+        data.temperature = -998.0; 
+        data.humidity    = -998.0;
+    }
+    // 3. Kiểm tra Nhảy vọt (Data Spike - Variance Check > 15 độ) -> Test Case 10
+    else if (lastSensors.temperature > -900.0 && abs(new_temp - lastSensors.temperature) > 15.0) {
+        data.temperature = -997.0; 
+        data.humidity    = new_hum;
+    }
+    // Dữ liệu Sạch (Clean Data)
+    else {
+        data.temperature = new_temp;
+        data.humidity    = new_hum;
+    }
 
     // Soil Moisture (ADC → %)
-    // ADC 4095 = khô hoàn toàn (0%), ADC 1500 = ướt (100%)
     int rawSoil = analogRead(PIN_SOIL_ADC);
-    data.soilMoisture = constrain(map(rawSoil, 4095, 1500, 0, 100), 0, 100);
+    // ADC ESP32 trả về 0 nếu chân bị chạm GND (ngắn mạch) hoặc hỏng hoàn toàn
+    if (rawSoil == 0) {
+        data.soilMoisture = -999.0; // Lỗi cảm biến
+    } else {
+        data.soilMoisture = constrain(map(rawSoil, 4095, 1500, 0, 100), 0, 100);
+    }
 
     // TSL2561 (Lux)
     sensors_event_t event;
@@ -569,13 +662,16 @@ void sendTelemetry() {
     }
 }
 
+
+
 // =============================================================
 // SETUP
 // =============================================================
 void setup() {
     setCpuFrequencyMhz(80); // Hạ xung nhịp xuống 80MHz giúp giảm nhiệt độ đáng kể
     Serial.begin(115200);
-    Serial.println("\n\n[Boot] Moc Dao Tu Tien v2.0 khoi dong...");
+    delay(1000); // Chờ 1 giây để đảm bảo Serial Terminal của Wokwi bắt kịp mạch
+    Serial.println("\n\n[Boot] Moc Dao Tu Tien khoi dong...");
 
     // Khởi tạo I2C và OLED
     Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
@@ -599,7 +695,22 @@ void setup() {
 
     delay(1000);
 
-    // Đọc cấu hình từ NVS
+#ifdef WOKWI_SIMULATION
+    // ── Chế độ giả lập Wokwi ──────────────────────────────────
+    // Bỏ qua NVS, dùng thẳng credentials từ secrets.h
+    Serial.println("[SIM] WOKWI_SIMULATION mode — dung truc tiep secrets.h");
+    cfg_ssid       = WIFI_SSID;
+    cfg_pass       = WIFI_PASS;
+    cfg_plant_code = DEFAULT_PLANT_CODE;
+    cfg_verify_code = DEFAULT_VERIFY_CODE;
+    cfg_server     = SERVER_HOST;
+    oledShow("WOKWI SIM MODE", cfg_plant_code.c_str(), "Dang ket noi WiFi...");
+    connectWiFiOrConfig();
+    if (WiFi.status() == WL_CONNECTED) {
+        lastSensors = readSensors();
+    }
+#else
+    // ── Chế độ thường: đọc cấu hình từ NVS ───────────────────
     bool hasConfig = loadConfig();
 
     if (!hasConfig) {
@@ -615,6 +726,7 @@ void setup() {
             lastSensors = readSensors();
         }
     }
+#endif
 }
 
 // =============================================================
