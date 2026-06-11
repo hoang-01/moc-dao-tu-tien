@@ -9,6 +9,9 @@ import DashboardPage  from './pages/DashboardPage.jsx'
 import ProtectedRoute from './components/auth/ProtectedRoute.jsx'
 import PlantsListPage from './pages/PlantsListPage.jsx'
 import ProfilePage from './pages/ProfilePage.jsx'
+import LeaderboardPage from './pages/LeaderboardPage.jsx'
+import AdminPage from './pages/AdminPage.jsx'
+import AdminRoute from './components/auth/AdminRoute.jsx'
 
 export default function App() {
   const { fetchMe, accessToken } = useAuthStore()
@@ -44,6 +47,10 @@ export default function App() {
           <Route path="/claim"            element={<ClaimPage />} />
           <Route path="/dashboard"        element={<DashboardPage />} />
           <Route path="/dashboard/:plantId" element={<DashboardPage />} />
+          <Route path="/leaderboard"      element={<LeaderboardPage />} />
+          <Route element={<AdminRoute />}>
+            <Route path="/admin"          element={<AdminPage />} />
+          </Route>
         </Route>
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>

@@ -107,3 +107,35 @@ export const plantsApi = {
 export const leaderboardApi = {
   getLeaderboard: (limit = 20) => api.get('/leaderboard', { params: { limit } }),
 }
+
+// ─── Admin (yêu cầu role = "admin") ───────────────────────────────────────────
+export const adminApi = {
+  // GET /api/admin/dashboard → thống kê tổng quan hệ thống
+  getDashboard: () => api.get('/admin/dashboard'),
+
+  // Quản lý thiết bị IoT
+  listDevices: () => api.get('/admin/devices'),
+  createDevice: () => api.post('/admin/devices'), // tự sinh Plant Code + Verify Code
+  updateDevice: (deviceId, isActive) =>
+    api.put(`/admin/devices/${deviceId}`, { is_active: isActive }),
+
+  // Quản lý loại cây & ngưỡng lý tưởng
+  listPlantTypes: () => api.get('/admin/plant-types'),
+  createPlantType: (payload) => api.post('/admin/plant-types', payload),
+  updatePlantType: (typeId, payload) =>
+    api.put(`/admin/plant-types/${typeId}`, payload),
+  deletePlantType: (typeId) => api.delete(`/admin/plant-types/${typeId}`),
+
+  // Cấu hình hệ số Tu Vi (EXP)
+  getExpConfig: () => api.get('/admin/exp-config'),
+  updateExpConfig: (configs) => api.put('/admin/exp-config', { configs }),
+
+  // Cấu hình mốc Cảnh Giới (Rank)
+  getRankConfig: () => api.get('/admin/rank-config'),
+  updateRankConfig: (ranks) => api.put('/admin/rank-config', { ranks }),
+}
+
+// ─── SSE (Server-Sent Events) ─────────────────────────────────────────────────
+// Trả về URL stream real-time cho 1 cây. EventSource không gửi được header Auth
+// nên endpoint /api/events/{plant_id} ở backend không yêu cầu JWT.
+export const sseUrl = (plantId) => `${BASE_URL}/events/${plantId}`

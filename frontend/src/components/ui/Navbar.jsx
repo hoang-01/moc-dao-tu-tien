@@ -47,6 +47,11 @@ export default function Navbar() {
       {/* User */}
       {user && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <NavLink label="Vườn" onClick={() => navigate('/plants')} />
+          <NavLink label="Xếp hạng" onClick={() => navigate('/leaderboard')} />
+          {user.role === 'admin' && (
+            <NavLink label="Quản trị" onClick={() => navigate('/admin')} />
+          )}
           <div
            onClick={() => navigate('/profile')}
            style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -91,5 +96,23 @@ export default function Navbar() {
         </div>
       )}
     </nav>
+  )
+}
+
+// Link điều hướng dạng text trên Navbar
+function NavLink({ label, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: 'transparent', border: 'none', cursor: 'pointer',
+        fontSize: 13.5, color: 'var(--text-muted)', padding: '4px 6px',
+        fontFamily: 'inherit', transition: 'color 0.15s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)' }}
+      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)' }}
+    >
+      {label}
+    </button>
   )
 }
