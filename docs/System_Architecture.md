@@ -89,8 +89,19 @@ Hệ thống sử dụng **PostgreSQL** thông qua SQLAlchemy.
 - `GET /api/plants/me/history`: Xem biểu đồ dữ liệu lịch sử môi trường.
 
 ### 5.3. IoT Ingestion (Telemetry)
-- Thiết bị gửi vào Topic: `plants/{plant_code}/telemetry`
-- Payload dạng JSON: `{"soil_moisture": 45, "light": 1000, "temperature": 28, "humidity": 60}`
+- Thiết bị gửi vào Topic: `devices/{plant_code}/telemetry`
+- Payload dạng JSON:
+  ```json
+  {
+    "sensors": [
+      { "key": "soil_moisture", "value": 45.0 },
+      { "key": "light", "value": 1000.0 },
+      { "key": "temperature", "value": 28.0 },
+      { "key": "humidity", "value": 60.0 }
+    ]
+  }
+  ```
+
 
 ### 5.4. Leaderboard (Xếp hạng)
 - `GET /api/leaderboard`: Danh sách cao thủ Tu Tiên (Top Cây có Tu Vi cao nhất).

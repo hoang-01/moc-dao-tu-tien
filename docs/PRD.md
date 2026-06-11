@@ -1,4 +1,4 @@
-﻿# Product Requirements Document (PRD)
+# Product Requirements Document (PRD)
 # Dự án: Mộc Đạo Tu Tiên (Flora Cultivation)
 
 > **Phiên bản:** 2.1  
@@ -101,7 +101,7 @@
 |---|---|
 | **Mô tả** | Thiết bị IoT thu thập dữ liệu các chỉ số môi trường sống của cây, gửi lên hệ thống liên tục |
 | **Tần suất** | Liên tục theo chu kỳ |
-| **Ghi chú** | Loại cảm biến và chỉ số cụ thể sẽ được quy định trong tài liệu kỹ thuật (SRS / System Design) |
+| **Ghi chú** | Loại cảm biến và chỉ số cụ thể sẽ được quy định trong tài liệu kỹ thuật (System Architecture) |
 
 **User Stories:**
 - Là người dùng, tôi muốn xem các chỉ số môi trường hiện tại của cây trên Dashboard.
