@@ -42,7 +42,7 @@ Dự án sử dụng các thiết bị IoT gắn trực tiếp vào chậu cây 
 
 Toàn bộ dự án được chia thành các phân hệ chính sau, mỗi thư mục đều có `README.md` cấu hình riêng biệt:
 
-- 📄 **[docs/](./docs/):** Lưu trữ tài liệu phân tích, kỹ thuật, và báo cáo (BRD, PRD, SRS, Hardware Spec).
+- 📄 **[docs/](./docs/):** Lưu trữ tài liệu phân tích, kỹ thuật, và báo cáo (BRD, PRD, System Architecture, Hardware Spec).
 - 🖥️ **[backend/](./backend/):** Mã nguồn Backend (RESTful API, Telemetry Xử lý, tính toán Tu Vi, Admin Suite).
 - 🌐 **[frontend/](./frontend/):** Mã nguồn Frontend (Web App Gamification, Dashboard).
 - 🔌 **[firmware/](./firmware/):** Mã nguồn IoT Firmware (đọc cảm biến, gửi dữ liệu, xác thực thiết bị).
