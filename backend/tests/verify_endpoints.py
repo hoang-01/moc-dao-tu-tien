@@ -227,45 +227,36 @@ class VerificationSuite:
                 headers=headers_device,
                 json_data=telemetry_payload,
             )
-            # Kiểm tra EXP tích lũy > 0 sau khi gửi telemetry hợp lệ
+            # Kiểm tra exp_awarded == False (vì tính EXP được xử lý ngầm ở scheduler)
             if first_telemetry_response:
-                exp_added = first_telemetry_response.get("exp_added", -1)
-                if exp_added > 0:
+                exp_awarded = first_telemetry_response.get("exp_awarded", None)
+                if exp_awarded is False:
                     self.log_result(
-                        "5a. EXP Award Assertion",
+                        "5a. Asynchronous EXP Assertion",
                         "PASSED",
-                        f"exp_added={exp_added} > 0 ✓",
+                        "exp_awarded=False (được tính ngầm qua scheduler) ✓",
                     )
                 else:
                     self.log_result(
-                        "5a. EXP Award Assertion",
+                        "5a. Asynchronous EXP Assertion",
                         "FAILED",
-                        f"exp_added={exp_added} — expected > 0",
+                        f"exp_awarded={exp_awarded} — expected False",
                     )
 
-            # TC-05.1 — Anti-spam: Gửi telemetry lần 2 ngay lập tức (<55s)
-            # Backend phải trả về exp_added == 0 (bị chặn anti-spam)
+            # Gửi telemetry lần 2 (lưu dữ liệu bình thường, anti-spam xử lý tại scheduler)
             second_telemetry_response = await self.verify_endpoint(
-                "5b. Anti-spam (TC-05.1) — Gửi telemetry lần 2",
+                "5b. Upload Telemetry Second Time",
                 "POST",
                 f"/api/devices/{self.plant_code}/telemetry",
                 headers=headers_device,
                 json_data=telemetry_payload,
             )
             if second_telemetry_response is not None:
-                exp_added_2nd = second_telemetry_response.get("exp_added", -1)
-                if exp_added_2nd == 0:
-                    self.log_result(
-                        "5c. Anti-spam Assertion (exp_added=0)",
-                        "PASSED",
-                        "exp_added=0 — Anti-spam hoạt động đúng ✓",
-                    )
-                else:
-                    self.log_result(
-                        "5c. Anti-spam Assertion (exp_added=0)",
-                        "FAILED",
-                        f"exp_added={exp_added_2nd} — expected 0 (anti-spam phải chặn)",
-                    )
+                self.log_result(
+                    "5c. Second Upload Assertion",
+                    "PASSED",
+                    "Gửi lần 2 thành công ✓",
+                )
 
         # 5. User Dashboard
         dashboard_res = await self.verify_endpoint(

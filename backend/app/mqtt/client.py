@@ -132,3 +132,25 @@ async def stop_mqtt() -> None:
         await mqtt_client.disconnect()
         mqtt_client = None
         logger.info("🔌 MQTT client đã ngắt kết nối")
+
+
+async def publish_to_device(plant_code: str, payload: dict) -> bool:
+    """Publish a JSON payload to a device's response topic.
+
+    Topic: devices/{plant_code}/response
+    """
+    global mqtt_client
+    if mqtt_client is None:
+        logger.warning("MQTT client chưa được khởi tạo, không thể publish tới %s", plant_code)
+        return False
+
+    try:
+        topic = f"devices/{plant_code}/response"
+        payload_str = json.dumps(payload)
+        # client.publish là hàm đồng bộ trong gmqtt (nó xếp lịch gửi trên event loop)
+        mqtt_client.publish(topic, payload_str, qos=1)
+        logger.info("📤 Đã publish MQTT message tới %s: %s", topic, payload_str)
+        return True
+    except Exception as e:
+        logger.error("Lỗi khi publish MQTT tới %s: %s", plant_code, e)
+        return False

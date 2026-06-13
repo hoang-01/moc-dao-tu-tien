@@ -47,8 +47,12 @@ async def pair_plant(
     Raises:
         ValueError: Khi xác thực thất bại hoặc vi phạm ràng buộc.
     """
-    # 1. Bỏ giới hạn 1 user - 1 cây để hỗ trợ Đa chậu
-    # stmt = select(Plant).where(Plant.user_id == user.id)
+    # 1. Giới hạn 1 user - 1 chậu cây theo BRD/PRD (Ngăn lỗi MultipleResultsFound)
+    stmt = select(Plant).where(Plant.user_id == user.id)
+    result = await db.execute(stmt)
+    existing_plant = result.scalar_one_or_none()
+    if existing_plant is not None:
+        raise ValueError("Tài khoản đã liên kết với một chậu cây khác")
 
     # 2. Tìm device
     stmt = select(Device).where(Device.plant_code == plant_code)
@@ -107,6 +111,20 @@ async def pair_plant(
         name,
         plant_type.name,
     )
+
+    # Gửi tín hiệu đã paired và khởi tạo Tu Vi về thiết bị qua MQTT
+    try:
+        from app.mqtt.client import publish_to_device
+        await publish_to_device(
+            plant_code,
+            {
+                "total_exp": 0,
+                "rank_name": default_rank.name,
+                "is_paired": True
+            }
+        )
+    except Exception as e:
+        logger.warning("Không thể gửi thông báo pairing thành công tới thiết bị qua MQTT: %s", e)
 
     return plant
 

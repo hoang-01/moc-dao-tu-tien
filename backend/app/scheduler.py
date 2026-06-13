@@ -18,7 +18,10 @@ async def calculate_exp_batch():
     async with async_session_factory() as db:
         try:
             # Lấy tất cả các cây đang Active (có thiết bị đã paired)
-            stmt = select(Plant).options(selectinload(Plant.current_rank))
+            stmt = select(Plant).options(
+                selectinload(Plant.current_rank),
+                selectinload(Plant.device),
+            )
             result = await db.execute(stmt)
             plants = result.scalars().all()
 

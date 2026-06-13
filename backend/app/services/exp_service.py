@@ -249,6 +249,21 @@ async def process_exp(
         },
     )
 
+    # Gửi cập nhật về thiết bị qua MQTT
+    if plant.device:
+        try:
+            from app.mqtt.client import publish_to_device
+            await publish_to_device(
+                plant.device.plant_code,
+                {
+                    "total_exp": int(plant.total_exp),
+                    "rank_name": new_rank.name,
+                    "is_paired": True
+                }
+            )
+        except Exception as e:
+            logger.warning("Không thể publish EXP tới thiết bị qua MQTT: %s", e)
+
     return {
         "exp_awarded": True,
         "delta": delta,
