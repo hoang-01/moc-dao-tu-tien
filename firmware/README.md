@@ -6,10 +6,31 @@ Thư mục này chứa mã nguồn thiết bị IoT (Firmware) của dự án **
 
 ## 🏗 Kiến trúc & Luồng hoạt động
 
-Hệ thống tuân thủ mô hình **Thin IoT Client + Smart Backend**:
-*   **Gửi Dữ Liệu (Telemetry - Uplink)**: Mỗi 60 giây, ESP32 thu thập thông số môi trường (Nhiệt độ, Độ ẩm không khí, Độ ẩm đất, Ánh sáng) và đẩy bản tin JSON siêu nhẹ qua MQTT tới topic `devices/{plant_code}/telemetry`. 
-*   **Nhận Phản Hồi (Game State - Downlink)**: Lắng nghe liên tục trên topic `devices/{plant_code}/response`. Ngay khi Backend tính toán xong điểm kinh nghiệm (EXP) và cảnh giới Tu Tiên, mạch sẽ nhận và biến đổi giao diện màn hình OLED lập tức.
-*   **LWT (Last Will and Testament)**: Đăng ký mạng tự động. Khi mất điện hoặc rớt mạng lưới, cấu hình LWT `"offline"` tự động kích hoạt trên máy chủ, đồng bộ tức thời với Web Dashboard bảo vệ tính minh bạch của thiết bị.
+Hệ thống tuân thủ mô hình **Thin IoT Client + Smart Backend** với luồng vận hành chi tiết như sau:
+
+### 1. Luồng Khởi động (Boot Sequence)
+* **Đọc NVS (Bộ nhớ Flash)**: ESP32 trích xuất cấu hình WiFi và các thông tin xác thực (`verify_code`). Mã thiết bị (`plant_code`) được nạp cứng sẵn trong firmware.
+* **Kiểm tra trạng thái**:
+  * **Lần đầu khởi động (Chưa có cấu hình)**: Đi vào **Chế độ Cấu hình (Config Mode)**.
+  * **Đã có cấu hình**: Thử kết nối WiFi (tối đa 3 lần).
+    * Kết nối thành công ➔ Chuyển sang **Trạng thái Hoạt động (Telemetry Loop)**.
+    * Kết nối thất bại (sai pass, đổi router...) ➔ Tự động bật **Chế độ Cấu hình** để người dùng nhập lại mạng mới.
+
+### 2. Trạng thái Hoạt động (Telemetry Loop)
+Chu kỳ lặp diễn ra đều đặn mỗi **60 giây**:
+1. **Đọc Cảm Biến**: Trích xuất dữ liệu từ DHT22, TSL2561, Cảm biến ẩm đất. Kết hợp bộ lọc phần mềm để loại bỏ các dữ liệu rác/nhảy vọt.
+2. **Gửi Dữ Liệu (Uplink)**: Đóng gói thành chuẩn JSON và Publish lên MQTT Broker qua topic `devices/{plant_code}/telemetry`.
+3. **Đánh giá Cục bộ**: Phân tích tức thời "Trạng Thái Linh Khí" (Ví dụ: Tẩu hỏa nhập ma, Linh khí dồi dào, Tĩnh lặng tu luyện...) dựa trên ngưỡng an toàn của cảm biến.
+4. **Hiển thị OLED**: Cập nhật toàn bộ lên giao diện màn hình gồm biểu tượng WiFi/MQTT, thông số môi trường thực và tiến độ Tu Vi.
+
+### 3. Cập nhật Trò chơi (Game State - Downlink)
+* ESP32 giữ kết nối Subscribe liên tục tại topic `devices/{plant_code}/response`.
+* Bất cứ khi nào Backend xử lý xong logic (sau khi nhận telemetry hoặc do user tương tác trên app), Backend sẽ phản hồi lại thông tin về Tu Vi (`total_exp`) và Cảnh Giới (`rank_name`).
+* ESP32 nhận bản tin này và lập tức cập nhật lại thanh tiến trình (Progress Bar) trên OLED mà không cần đợi tới chu kỳ 60 giây tiếp theo.
+
+### 4. Quản lý Sự cố (LWT - Last Will)
+* Thiết bị sử dụng cơ chế LWT (Last Will and Testament) của MQTT: Đăng ký sẵn trạng thái `"offline"` tại topic `devices/{plant_code}/status` với Broker ngay lúc mới kết nối.
+* Nếu bị rút nguồn điện hoặc mất mạng đột ngột, Broker sẽ tự động phát bản tin `"offline"` báo tử lên Backend, giúp ứng dụng lập tức bôi xám thiết bị.
 
 ---
 
