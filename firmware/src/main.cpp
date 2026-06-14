@@ -214,7 +214,7 @@ void setup() {
 
     // Thực hiện HTTP Auth lấy Token
     HTTPClient http;
-    String authUrl = String("http://") + MQTT_HOST + ":8000/api/devices/" + DEFAULT_PLANT_CODE + "/auth";
+    String authUrl = String(SERVER_HOST) + "/api/devices/" + DEFAULT_PLANT_CODE + "/auth";
     Serial.print("Authenticating with ");
     Serial.println(authUrl);
     
