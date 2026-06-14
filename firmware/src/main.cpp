@@ -18,12 +18,12 @@
  *   → Lưu vào NVS → Restart → Kết nối bình thường
  *
  * TELEMETRY LOOP (mỗi 60s):
- *   Đọc DHT22 → Đọc Soil → Đọc TSL2561
+ *   Đọc DHT22 → Đọc Soil → Đọc BH1750
  *   → MQTT Publish: devices/{plant_code}/telemetry
  *   → Hiển thị OLED
  *
  * Thư viện (platformio.ini):
- *   - ArduinoJson, DHT, Adafruit TSL2561, Adafruit SSD1306
+ *   - ArduinoJson, DHT, BH1750, Adafruit SSD1306
  *   - WebServer (built-in ESP32), Preferences (built-in ESP32)
  *   - PubSubClient (MQTT)
  */
@@ -36,7 +36,7 @@
 #include <Preferences.h>
 #include <Wire.h>
 #include <DHT.h>
-#include <Adafruit_TSL2561_U.h>
+#include <BH1750.h>
 #include <Adafruit_SSD1306.h>
 #include <PubSubClient.h>
 #include "secrets.h"
@@ -54,16 +54,24 @@ unsigned long lastMqttRetry   = 0;
 #define WIFI_MAX_RETRY         3          // Số lần thử kết nối WiFi
 #define WIFI_RETRY_DELAY_MS    10000      // Mỗi lần thử đợi tối đa 10s
 #define CONFIG_TIMEOUT_MS      300000UL  // Portal tự đóng sau 5 phút nếu không có ai vào
+#ifndef SOIL_DRY_VALUE
+#define SOIL_DRY_VALUE         4095
+#endif
+#ifndef SOIL_WET_VALUE
+#define SOIL_WET_VALUE         1500
+#endif
+#define SENSOR_MIN_READ_INTERVAL_MS 2000UL
 
 // ── OLED ─────────────────────────────────────────────────────
 #define OLED_WIDTH  128
 #define OLED_HEIGHT 64
 Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 bool oledOk = false;
+bool lightOk = false;
 
 // ── Phần cứng ────────────────────────────────────────────────
 DHT dht(PIN_DHT22, DHT22);
-Adafruit_TSL2561_Unified tsl(TSL2561_ADDR_FLOAT, 12345);
+BH1750 lightMeter;
 
 // ── NVS ───────────────────────────────────────────────────────
 Preferences prefs;
@@ -80,6 +88,7 @@ String cfg_server     = SERVER_HOST; // Sử dụng SERVER_HOST định nghĩa t
 
 // ── Biến trạng thái ───────────────────────────────────────────
 unsigned long lastSendTime      = 0;
+unsigned long lastSensorReadAt  = 0;
 bool          configMode        = false;
 
 // ── Cấu trúc dữ liệu ─────────────────────────────────────────
@@ -93,7 +102,7 @@ struct SensorData {
 // ── Gamification ──────────────────────────────────────────────
 int           cfg_total_exp = 0;
 String        cfg_rank_name = "Pham Moc";
-SensorData    lastSensors   = {0.0, 0.0, 0.0, 0.0};
+SensorData    lastSensors   = {-999.0, -999.0, -999.0, -999.0};
 
 // =============================================================
 // OLED helpers
@@ -107,13 +116,16 @@ void oledClear() {
 
 void oledShow(const char* line1, const char* line2 = "",
               const char* line3 = "", const char* line4 = "") {
+    Serial.printf("oledOk=%d\n", oledOk);
     if (!oledOk) return;
     oledClear();
     oled.setCursor(0, 0);  oled.println(line1);
     oled.setCursor(0, 16); oled.println(line2);
     oled.setCursor(0, 32); oled.println(line3);
     oled.setCursor(0, 48); oled.println(line4);
+    oled.println("TEST");
     oled.display();
+    
 }
 
 // =============================================================
@@ -147,6 +159,91 @@ String getLinhKhiState(float soil, float temp) {
     return "Linh khi suy kiet"; // POOR
 }
 
+const char* getOledLinhKhiState(float soil, float temp) {
+    if (temp == -999.0) return "DHT LOST";
+    if (temp == -998.0) return "DHT BAD";
+    if (temp == -997.0) return "TEMP SPIKE";
+    if (soil == -999.0) return "SOIL ERR";
+
+    if (temp > 40.0 || soil <= 5.0) return "DANGER";
+    if (soil >= 60.0) return "GOOD";
+    if (soil >= 40.0) return "NORMAL";
+    if (soil >= 20.0) return "LOW";
+    return "DRY";
+}
+
+String truncateForOled(const String& value, size_t maxLen) {
+    if (value.length() <= maxLen) return value;
+    return value.substring(0, maxLen);
+}
+
+const char* i2cErrorName(uint8_t error) {
+    switch (error) {
+        case 0: return "OK";
+        case 1: return "DATA_TOO_LONG";
+        case 2: return "ADDR_NACK";
+        case 3: return "DATA_NACK";
+        case 4: return "OTHER";
+        case 5: return "TIMEOUT";
+        default: return "UNKNOWN";
+    }
+}
+
+void logI2CBusState(const char* label) {
+    int sda = digitalRead(PIN_OLED_SDA);
+    int scl = digitalRead(PIN_OLED_SCL);
+    Serial.printf("[I2C] %s | SDA(GPIO%d)=%s SCL(GPIO%d)=%s\n",
+                  label,
+                  PIN_OLED_SDA, sda == HIGH ? "HIGH" : "LOW",
+                  PIN_OLED_SCL, scl == HIGH ? "HIGH" : "LOW");
+}
+
+bool i2cDevicePresent(uint8_t address) {
+    Wire.beginTransmission(address);
+    uint8_t error = Wire.endTransmission();
+    Serial.printf("[I2C] Probe 0x%02X -> err=%u (%s)\n", address, error, i2cErrorName(error));
+    return error == 0;
+}
+
+void scanI2CDevices() {
+    Serial.println("[I2C] Dang scan thiet bi...");
+    logI2CBusState("Truoc scan");
+    bool found = false;
+
+    const uint8_t addresses[] = {0x3C, 0x23, 0x5C};
+    for (uint8_t address : addresses) {
+        Wire.beginTransmission(address);
+        uint8_t error = Wire.endTransmission();
+        if (error == 0) {
+            Serial.printf("[I2C] Tim thay dia chi 0x%02X\n", address);
+            found = true;
+        } else {
+            Serial.printf("[I2C] Khong thay 0x%02X (err=%u %s)\n",
+                          address, error, i2cErrorName(error));
+        }
+        delay(5);
+    }
+
+    if (!found) {
+        Serial.println("[I2C] Khong tim thay OLED/BH1750 tren bus");
+    }
+    logI2CBusState("Sau scan");
+}
+
+bool beginLightSensor() {
+    if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire)) {
+        Serial.println("[BH1750] Tim thay cam bien anh sang tai 0x23");
+        return true;
+    }
+
+    if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x5C, &Wire)) {
+        Serial.println("[BH1750] Tim thay cam bien anh sang tai 0x5C");
+        return true;
+    }
+
+    return false;
+}
+
 // =============================================================
 // OLED: Vẽ màn hình Dashboard (Tu Vi + Cảnh Giới)
 // =============================================================
@@ -156,10 +253,11 @@ void drawDashboard(unsigned long remainSecs) {
     oled.setTextSize(1);
     oled.setTextWrap(false); // Ép không cho tự động rớt chữ M xuống dòng
     
-    // Dòng 1: Code và đếm ngược + Icon
+    // Dòng 1: Code và icon WiFi/MQTT
     oled.setCursor(0, 0);
-    // Rút gọn chữ P và V để tiết kiệm diện tích (Bỏ dấu 2 chấm)
-    oled.printf("P%s V%s", cfg_plant_code.c_str(), cfg_verify_code.c_str());
+    String plant = truncateForOled(cfg_plant_code, 6);
+    String verify = truncateForOled(cfg_verify_code, 4);
+    oled.printf("P:%s V:%s", plant.c_str(), verify.c_str());
     
     // Icon WiFi và MQTT ở góc phải (Chỉ dùng 1 ký tự W và M)
     if (WiFi.status() == WL_CONNECTED) {
@@ -169,7 +267,6 @@ void drawDashboard(unsigned long remainSecs) {
         oled.setCursor(120, 0); oled.print("M");
     }
     
-    oled.setTextWrap(true); // Trả lại bình thường cho các dòng dưới
     // Dòng 2: Chỉ số cảm biến (chia 2 cột nhỏ)
     char buf[32];
     oled.setCursor(0, 11);
@@ -190,23 +287,14 @@ void drawDashboard(unsigned long remainSecs) {
     
     // Dòng 3: Trạng Thái Linh Khí
     oled.setCursor(0, 33);
-    oled.print("TT: ");
-    oled.println(getLinhKhiState(lastSensors.soilMoisture, lastSensors.temperature));
+    snprintf(buf, sizeof(buf), "TT:%s", getOledLinhKhiState(lastSensors.soilMoisture, lastSensors.temperature));
+    oled.println(buf);
     
     // Dòng 4: Cảnh Giới và EXP
     oled.setCursor(0, 45);
-    snprintf(buf, sizeof(buf), "%s: %d", cfg_rank_name.c_str(), cfg_total_exp);
+    String rank = truncateForOled(cfg_rank_name, 10);
+    snprintf(buf, sizeof(buf), "%s:%d", rank.c_str(), cfg_total_exp);
     oled.println(buf);
-    
-    // Dòng 5: Progress Bar Tu Vi
-    int nextExp = getNextRankExp(cfg_total_exp);
-    float progress = (float)cfg_total_exp / nextExp;
-    if (progress > 1.0) progress = 1.0;
-    int barWidth = (int)(progress * 128);
-    
-    // Vẽ khung thanh tiến trình ở đáy màn hình
-    oled.drawRect(0, 56, 128, 8, SSD1306_WHITE);
-    oled.fillRect(0, 56, barWidth, 8, SSD1306_WHITE);
     
     oled.display();
 }
@@ -555,6 +643,13 @@ void connectWiFiOrConfig() {
 // Cảm biến: Đọc tất cả (Bao gồm bộ lọc nhiễu Data Validation)
 // =============================================================
 SensorData readSensors() {
+    unsigned long now = millis();
+    if (lastSensorReadAt > 0 && now - lastSensorReadAt < SENSOR_MIN_READ_INTERVAL_MS) {
+        Serial.println("[Sensor] Dung cache, tranh doc DHT qua day");
+        return lastSensors;
+    }
+    lastSensorReadAt = now;
+
     SensorData data;
 
     // Đọc DHT22 thô
@@ -583,21 +678,43 @@ SensorData readSensors() {
     }
 
     // Soil Moisture (ADC → %)
-    int rawSoil = analogRead(PIN_SOIL_ADC);
+    int rawSoil = 0;
+    int soilMin = 4095;
+    int soilMax = 0;
+    int soilZeroCount = 0;
+    long soilSum = 0;
+    const int soilSamples = 8;
+
+    for (int i = 0; i < soilSamples; i++) {
+        int sample = analogRead(PIN_SOIL_ADC);
+        if (sample == 0) soilZeroCount++;
+        soilMin = min(soilMin, sample);
+        soilMax = max(soilMax, sample);
+        soilSum += sample;
+        delay(2);
+    }
+    rawSoil = soilSum / soilSamples;
+
     // ADC ESP32 trả về 0 nếu chân bị chạm GND (ngắn mạch) hoặc hỏng hoàn toàn
-    if (rawSoil == 0) {
+    if (soilZeroCount == soilSamples) {
         data.soilMoisture = -999.0; // Lỗi cảm biến
     } else {
-        data.soilMoisture = constrain(map(rawSoil, 4095, 1500, 0, 100), 0, 100);
+        data.soilMoisture = constrain(map(rawSoil, SOIL_DRY_VALUE, SOIL_WET_VALUE, 0, 100), 0, 100);
+    }
+    Serial.printf("[Soil] samples=%d avg=%d min=%d max=%d zero=%d/%d cal(dry=%d wet=%d)\n",
+                  soilSamples, rawSoil, soilMin, soilMax, soilZeroCount, soilSamples,
+                  SOIL_DRY_VALUE, SOIL_WET_VALUE);
+
+    // BH1750 (Lux)
+    if (lightOk) {
+        float lux = lightMeter.readLightLevel();
+        data.light = (lux >= 0) ? lux : 0.0;
+    } else {
+        data.light = 0.0;
     }
 
-    // TSL2561 (Lux)
-    sensors_event_t event;
-    tsl.getEvent(&event);
-    data.light = (event.light > 0) ? event.light : 0.0;
-
-    Serial.printf("[Sensor] T=%.1fC H=%.1f%% Soil=%.1f%% L=%.0flux\n",
-                  data.temperature, data.humidity, data.soilMoisture, data.light);
+    Serial.printf("[Sensor] T=%.1fC H=%.1f%% Soil=%.1f%% (Raw=%d) L=%.0flux (BH1750=%s)\n",
+                  data.temperature, data.humidity, data.soilMoisture, rawSoil, data.light, lightOk ? "OK" : "ERR");
     return data;
 }
 
@@ -620,6 +737,7 @@ void sendTelemetry() {
 
     // Đọc cảm biến
     SensorData sensors = readSensors();
+    lastSensors = sensors;
 
     // Topic
     String telemetryTopic = "devices/" + cfg_plant_code + "/telemetry";
@@ -654,7 +772,6 @@ void sendTelemetry() {
         Serial.printf("[MQTT] Telemetry sent → %s\n", telemetryTopic.c_str());
         Serial.printf("[MQTT] Payload: %s\n", payload.c_str());
 
-        lastSensors = sensors;
         drawDashboard(0);
     } else {
         Serial.println("[MQTT] Publish that bai!");
@@ -664,69 +781,59 @@ void sendTelemetry() {
 
 
 
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
+
 // =============================================================
 // SETUP
 // =============================================================
 void setup() {
-    setCpuFrequencyMhz(80); // Hạ xung nhịp xuống 80MHz giúp giảm nhiệt độ đáng kể
+    // 1. Tắt tính năng báo lỗi sụt nguồn (Brownout) để tránh mạch bị sập liên tục
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+    // 2. Tắt hẳn WiFi ngay khi khởi động để tránh IC WiFi rút dòng quá mạnh (gây tụt áp)
+    WiFi.mode(WIFI_OFF);
+    delay(500);
+
     Serial.begin(115200);
     delay(1000); // Chờ 1 giây để đảm bảo Serial Terminal của Wokwi bắt kịp mạch
     Serial.println("\n\n[Boot] Moc Dao Tu Tien khoi dong...");
 
     // Khởi tạo I2C và OLED
+    logI2CBusState("Truoc Wire.begin");
     Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
-    if (oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Wire.setTimeOut(1000);
+    logI2CBusState("Sau Wire.begin");
+
+    // Khởi tạo BH1750 TRƯỚC màn hình OLED để tránh OLED ép xung I2C làm treo bus
+    if (beginLightSensor()) {
+        lightOk = true;
+    } else {
+        Serial.println("[BH1750] Khong tim thay cam bien anh sang!");
+    }
+
+    // Sau đó mới khởi tạo OLED
+    if (oled.begin(SSD1306_SWITCHCAPVCC, 0x3C, true, false)) {
         oledOk = true;
         oledShow("Moc Dao Tu Tien", "v2.0 Khoi dong...");
+        Serial.println("[OLED] Khoi tao OK tai 0x3C");
     } else {
         Serial.println("[OLED] Khong tim thay man hinh!");
     }
+    logI2CBusState("Sau OLED.begin");
 
     // Khởi tạo DHT22
     dht.begin();
 
-    // Khởi tạo TSL2561
-    if (tsl.begin()) {
-        tsl.enableAutoRange(true);
-        tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_101MS);
-    } else {
-        Serial.println("[TSL] Khong tim thay cam bien anh sang!");
-    }
+    // Khởi tạo ADC cảm biến đất
+    pinMode(PIN_SOIL_ADC, INPUT);
+    analogReadResolution(12);
+    analogSetPinAttenuation(PIN_SOIL_ADC, ADC_11db);
 
+    // Đã chuyển khởi tạo BH1750 lên trên
     delay(1000);
 
-#ifdef WOKWI_SIMULATION
-    // ── Chế độ giả lập Wokwi ──────────────────────────────────
-    // Bỏ qua NVS, dùng thẳng credentials từ secrets.h
-    Serial.println("[SIM] WOKWI_SIMULATION mode — dung truc tiep secrets.h");
-    cfg_ssid       = WIFI_SSID;
-    cfg_pass       = WIFI_PASS;
-    cfg_plant_code = DEFAULT_PLANT_CODE;
-    cfg_verify_code = DEFAULT_VERIFY_CODE;
-    cfg_server     = SERVER_HOST;
-    oledShow("WOKWI SIM MODE", cfg_plant_code.c_str(), "Dang ket noi WiFi...");
-    connectWiFiOrConfig();
-    if (WiFi.status() == WL_CONNECTED) {
-        lastSensors = readSensors();
-    }
-#else
-    // ── Chế độ thường: đọc cấu hình từ NVS ───────────────────
-    bool hasConfig = loadConfig();
 
-    if (!hasConfig) {
-        // Lần đầu dùng hoặc chưa cấu hình → Config Mode luôn
-        Serial.println("[Boot] Chua co config → Config Mode");
-        oledShow("Chua co cau hinh!", "Vao Config Mode...");
-        delay(2000);
-        startConfigMode();
-    } else {
-        // Có config → thử kết nối WiFi
-        connectWiFiOrConfig();
-        if (WiFi.status() == WL_CONNECTED) {
-            lastSensors = readSensors();
-        }
-    }
-#endif
 }
 
 // =============================================================
@@ -755,6 +862,14 @@ void loop() {
             static unsigned long lastOledUpdate = 0;
             if (now - lastOledUpdate >= 1000) {
                 lastOledUpdate = now;
+                
+                // Cập nhật cảm biến định kỳ mỗi 2 giây để hiển thị thời gian thực
+                static unsigned long lastSensorReadTime = 0;
+                if (now - lastSensorReadTime >= 2000) {
+                    lastSensorReadTime = now;
+                    lastSensors = readSensors();
+                }
+
                 drawDashboard(remain);
             }
         }
