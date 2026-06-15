@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { plantsApi } from '../services/api.js'
+import { plantsApi, sseUrl } from '../services/api.js'
 import toast from 'react-hot-toast'
 import Navbar from '../components/ui/Navbar.jsx'
 import Spinner from '../components/ui/Spinner.jsx'
@@ -18,6 +18,7 @@ export default function DashboardPage() {
   const [sensorLogs, setSensorLogs] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [live, setLive] = useState(false) // trạng thái kết nối SSE
 
   // Gộp lịch sử 4 cảm biến thành các hàng theo timestamp để vẽ chart
   const buildLogs = (histories) => {
@@ -65,11 +66,83 @@ export default function DashboardPage() {
     }
   }
 
+  // Tải dữ liệu ban đầu (dashboard + lịch sử cho chart)
   useEffect(() => {
     fetchData()
-    const interval = setInterval(() => fetchData(true), 30_000)
-    return () => clearInterval(interval)
   }, [])
+
+  // Áp dụng 1 event SSE vào state (thay cho polling 30s trước đây)
+  const applySensorUpdate = (payload) => {
+    const fieldOf = { soil_moisture: 'soil_moisture', temperature: 'temperature', light: 'light_level', humidity: 'humidity' }
+    const ts = payload.device_last_seen || new Date().toISOString()
+
+    // 1. Cập nhật chỉ số hiện tại trên các SensorCard
+    setDashboard((prev) => {
+      if (!prev) return prev
+      const sensors = [...(prev.sensors || [])]
+      Object.entries(payload.sensors || {}).forEach(([key, { value, quality }]) => {
+        const idx = sensors.findIndex((s) => s.sensor_key === key)
+        const entry = { sensor_key: key, value, quality, updated_at: ts }
+        if (idx >= 0) sensors[idx] = entry
+        else sensors.push(entry)
+      })
+      return {
+        ...prev,
+        sensors,
+        overall_quality: payload.overall_quality ?? prev.overall_quality,
+        device_online: true,
+        device_last_seen: ts,
+      }
+    })
+
+    // 2. Thêm 1 điểm mới vào biểu đồ xu hướng
+    setSensorLogs((prev) => {
+      const row = { recorded_at: ts }
+      Object.entries(payload.sensors || {}).forEach(([key, { value }]) => {
+        row[fieldOf[key] || key] = value
+      })
+      return [...prev, row].slice(-40)
+    })
+  }
+
+  const applyExpUpdate = (payload) => {
+    setDashboard((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        total_exp: payload.total_exp ?? prev.total_exp,
+        current_rank: prev.current_rank
+          ? { ...prev.current_rank, name: payload.rank_name ?? prev.current_rank.name, order: payload.rank_order ?? prev.current_rank.order }
+          : prev.current_rank,
+      }
+    })
+    if (payload.breakthrough) {
+      toast.success(`🌟 Đột phá Cảnh Giới: ${payload.rank_name}!`)
+    }
+  }
+
+  // Kết nối SSE real-time khi đã biết plant_id
+  const plantId = dashboard?.plant_id
+  useEffect(() => {
+    if (!plantId) return
+
+    const es = new EventSource(sseUrl(plantId))
+
+    es.onopen = () => setLive(true)
+    es.onerror = () => setLive(false) // EventSource sẽ tự kết nối lại
+
+    es.onmessage = (e) => {
+      try {
+        const { event, data } = JSON.parse(e.data)
+        if (event === 'sensor_update') applySensorUpdate(data)
+        else if (event === 'exp_update') applyExpUpdate(data)
+      } catch {
+        // Bỏ qua message không hợp lệ / heartbeat
+      }
+    }
+
+    return () => es.close()
+  }, [plantId])
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-base)' }}>
@@ -163,6 +236,21 @@ export default function DashboardPage() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{
+              fontSize: 11.5,
+              color: live ? 'var(--green-600)' : 'var(--text-muted)',
+              display: 'flex', alignItems: 'center', gap: 5,
+            }}
+              title={live ? 'Đang nhận dữ liệu real-time (SSE)' : 'Mất kết nối real-time, đang thử lại…'}
+            >
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%',
+                background: live ? 'var(--green-500)' : 'var(--text-muted)',
+                display: 'inline-block',
+                animation: live ? 'pulse 1.6s ease-in-out infinite' : 'none',
+              }} />
+              {live ? 'Live' : 'Offline'}
+            </span>
             <TuViBadge value={dashboard?.total_exp || 0} />
             <button
               onClick={() => fetchData(true)}
