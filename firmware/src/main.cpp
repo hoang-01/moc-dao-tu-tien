@@ -1,768 +1,373 @@
-/**
- * main.cpp — Mộc Đạo Tu Tiên | ESP32 Firmware v2.0
- *
- * LUỒNG KHỞI ĐỘNG:
- * ┌─ Boot ─────────────────────────────────────────────────────┐
- * │  1. Đọc NVS (wifi_ssid, wifi_pass, plant_code, server)     │
- * │  2. Nếu chưa có config → vào CONFIG MODE (AP Portal)       │
- * │  3. Nếu có config → thử kết nối WiFi (tối đa 3 lần)       │
- * │     - Thành công → vào TELEMETRY LOOP                      │
- * │     - Thất bại → vào CONFIG MODE để nhập lại               │
- * └────────────────────────────────────────────────────────────┘
- *
- * CONFIG MODE:
- *   ESP32 mở WiFi AP tên "MocDao-XXXXXX"
- *   → User kết nối vào AP đó
- *   → Mở trình duyệt vào 192.168.4.1
- *   → Nhập WiFi SSID, Password, Plant Code, Server URL
- *   → Lưu vào NVS → Restart → Kết nối bình thường
- *
- * TELEMETRY LOOP (mỗi 60s):
- *   Đọc DHT22 → Đọc Soil → Đọc TSL2561
- *   → MQTT Publish: devices/{plant_code}/telemetry
- *   → Hiển thị OLED
- *
- * Thư viện (platformio.ini):
- *   - ArduinoJson, DHT, Adafruit TSL2561, Adafruit SSD1306
- *   - WebServer (built-in ESP32), Preferences (built-in ESP32)
- *   - PubSubClient (MQTT)
- */
-
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
-// HTTPClient removed — telemetry now sent via MQTT
-#include <ArduinoJson.h>
-#include <Preferences.h>
-#include <Wire.h>
-#include <DHT.h>
-#include <Adafruit_TSL2561_U.h>
-#include <Adafruit_SSD1306.h>
-#include <PubSubClient.h>
 #include "secrets.h"
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <BH1750.h>
+#include <DHT.h>
+#include <PubSubClient.h>
+#include <WiFiManager.h>
+#include <Wire.h>
+#include <HTTPClient.h>
 
-// ── MQTT ──────────────────────────────────────────────────────
-#define MQTT_PORT             1883
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+DHT dht(PIN_DHT22, DHT22);
+BH1750 lightMeter;
+
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-unsigned long lastMqttRetry   = 0;
 
-// ── Thời gian ─────────────────────────────────────────────────
-#ifndef TELEMETRY_INTERVAL_MS
-#define TELEMETRY_INTERVAL_MS  60000UL  // 60 giây (override trong secrets.h để test nhanh)
-#endif
-#define WIFI_MAX_RETRY         3          // Số lần thử kết nối WiFi
-#define WIFI_RETRY_DELAY_MS    10000      // Mỗi lần thử đợi tối đa 10s
-#define CONFIG_TIMEOUT_MS      300000UL  // Portal tự đóng sau 5 phút nếu không có ai vào
+// Timers
+unsigned long lastSensorRead = 0;
+unsigned long lastOLEDUpdate = 0;
+unsigned long lastMQTTPublish = 0;
+unsigned long lastReconnectAttempt =
+    0xFFFFFFFF - 5000; // Để nó connect ngay lập tức lần đầu
 
-// ── OLED ─────────────────────────────────────────────────────
-#define OLED_WIDTH  128
-#define OLED_HEIGHT 64
-Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
-bool oledOk = false;
+// Data từ Server
+long total_exp = 0;
+String rank_name = "Chưa rõ";
+String currentStatus = "WAIT";
+String serverMessage = "";
 
-// ── Phần cứng ────────────────────────────────────────────────
-DHT dht(PIN_DHT22, DHT22);
-Adafruit_TSL2561_Unified tsl(TSL2561_ADDR_FLOAT, 12345);
+// Sensor State
+float lastSentTemp = -999.0;
+float lastSentHum = -999.0;
+bool lastDHTError = false;
 
-// ── NVS ───────────────────────────────────────────────────────
-Preferences prefs;
+float currentTemp = 0.0;
+float currentHum = 0.0;
+float currentLux = 0.0;
+int currentSoil = 0;
+bool currentDHTError = false;
 
-// ── Config Portal Web Server ──────────────────────────────────
-WebServer configServer(80);
+// Topics
+char telemetry_topic[100];
+char status_topic[100];
+char response_topic[100];
 
-// ── Biến cấu hình (load từ NVS) ───────────────────────────────
-String cfg_ssid       = "";
-String cfg_pass       = "";
-String cfg_plant_code = "";
-String cfg_verify_code = "";
-String cfg_server     = SERVER_HOST; // Sử dụng SERVER_HOST định nghĩa trong secrets.h
+// JWT Token
+String jwtToken = "";
 
-// ── Biến trạng thái ───────────────────────────────────────────
-unsigned long lastSendTime      = 0;
-bool          configMode        = false;
+void updateOLED() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
 
-// ── Cấu trúc dữ liệu ─────────────────────────────────────────
-struct SensorData {
-    float temperature;
-    float humidity;
-    float soilMoisture;
-    float light;
-};
+  // --- Dòng 1: P:{plant_code}  WM ---
+  display.setCursor(0, 0);
+  display.printf("P:%s", String(DEFAULT_PLANT_CODE).substring(0, 6).c_str());
 
-// ── Gamification ──────────────────────────────────────────────
-int           cfg_total_exp = 0;
-String        cfg_rank_name = "Pham Moc";
-SensorData    lastSensors   = {0.0, 0.0, 0.0, 0.0};
+  // Vẽ W và M ở góc phải
+  display.setCursor(128 - 12, 0);
+  if (WiFi.status() == WL_CONNECTED)
+    display.print("W");
+  else
+    display.print(" ");
+  if (mqttClient.connected())
+    display.print("M");
+  else
+    display.print(" ");
 
-// =============================================================
-// OLED helpers
-// =============================================================
-void oledClear() {
-    if (!oledOk) return;
-    oled.clearDisplay();
-    oled.setTextColor(SSD1306_WHITE);
-    oled.setTextSize(1);
+  // --- Dòng 2: Trạng thái ---
+  // Thu nhỏ chữ và dồn lên trên để tránh nửa dưới bị nhiễu
+  display.setTextSize(1);
+  display.setCursor(0, 10);
+  display.printf("Trang thai: %s", currentStatus.c_str());
+
+  // --- Dòng 3: Cấp bậc và EXP ---
+  display.setCursor(0, 20);
+  String display_rank = rank_name;
+  if (rank_name == "Luyện Khí")
+    display_rank = "Luyen Khi";
+  else if (rank_name == "Trúc Cơ")
+    display_rank = "Truc Co";
+  else if (rank_name == "Kim Đan")
+    display_rank = "Kim Dan";
+  else if (rank_name == "Chưa rõ")
+    display_rank = "Chua ro";
+
+  display.printf("%s: %ld", display_rank.c_str(), total_exp);
+
+  display.display();
 }
 
-void oledShow(const char* line1, const char* line2 = "",
-              const char* line3 = "", const char* line4 = "") {
-    if (!oledOk) return;
-    oledClear();
-    oled.setCursor(0, 0);  oled.println(line1);
-    oled.setCursor(0, 16); oled.println(line2);
-    oled.setCursor(0, 32); oled.println(line3);
-    oled.setCursor(0, 48); oled.println(line4);
-    oled.display();
-}
+void mqttCallback(char *topic, byte *payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
 
-// =============================================================
-// Logic Gamification: Hàm tính mốc EXP kế tiếp
-// =============================================================
-int getNextRankExp(int current_exp) {
-    if (current_exp < 100) return 100;      // Luyện Khí
-    if (current_exp < 500) return 500;      // Trúc Cơ
-    if (current_exp < 1500) return 1500;    // Kim Đan
-    if (current_exp < 4000) return 4000;    // Nguyên Anh
-    if (current_exp < 8000) return 8000;    // Hóa Thần
-    if (current_exp < 15000) return 15000;  // Đại Thừa
-    if (current_exp < 30000) return 30000;  // Độ Kiếp
-    return 30000; // Đã đạt đỉnh
-}
+  String message;
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.println(message);
 
-// =============================================================
-// Logic Gamification: Lấy Trạng Thái Linh Khí
-// =============================================================
-String getLinhKhiState(float soil, float temp) {
-    // Xử lý các mã lỗi phần cứng từ readSensors()
-    if (temp == -999.0) return "Loi: Mat ket noi DHT!"; 
-    if (temp == -998.0) return "Loi: DHT Du lieu rac!";
-    if (temp == -997.0) return "Loi: Nhiet do nhay vot!";
-    if (soil == -999.0) return "Loi: Cam bien dat!";
+  if (String(topic) == String(response_topic)) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, message);
+    if (!error) {
 
-    if (temp > 40.0 || soil <= 5.0) return "Tau hoa nhap ma!"; // DANGER
-    if (soil >= 60.0) return "Linh khi doi dao"; // EXCELLENT
-    if (soil >= 40.0) return "Dang phat trien"; // GOOD
-    if (soil >= 20.0) return "Tinh lang tu luyen"; // FAIR
-    return "Linh khi suy kiet"; // POOR
-}
+      if (doc.containsKey("total_exp")) {
+        total_exp = doc["total_exp"].as<long>();
+      }
 
-// =============================================================
-// OLED: Vẽ màn hình Dashboard (Tu Vi + Cảnh Giới)
-// =============================================================
-void drawDashboard(unsigned long remainSecs) {
-    if (!oledOk) return;
-    oledClear();
-    oled.setTextSize(1);
-    oled.setTextWrap(false); // Ép không cho tự động rớt chữ M xuống dòng
-    
-    // Dòng 1: Code và đếm ngược + Icon
-    oled.setCursor(0, 0);
-    // Rút gọn chữ P và V để tiết kiệm diện tích (Bỏ dấu 2 chấm)
-    oled.printf("P%s V%s", cfg_plant_code.c_str(), cfg_verify_code.c_str());
-    
-    // Icon WiFi và MQTT ở góc phải (Chỉ dùng 1 ký tự W và M)
-    if (WiFi.status() == WL_CONNECTED) {
-        oled.setCursor(110, 0); oled.print("W");
+      if (doc.containsKey("rank_name")) {
+        rank_name = doc["rank_name"].as<String>();
+      }
+
+      if (doc.containsKey("status")) {
+        currentStatus = doc["status"].as<String>();
+      }
+
+      if (doc.containsKey("message")) {
+        serverMessage = doc["message"].as<String>();
+      }
+
+      Serial.println("=== SERVER UPDATE ===");
+      Serial.printf("EXP    : %ld\n", total_exp);
+      Serial.printf("Rank   : %s\n", rank_name.c_str());
+      Serial.printf("Status : %s\n", currentStatus.c_str());
+
+      updateOLED();
     }
-    if (mqttClient.connected()) {
-        oled.setCursor(120, 0); oled.print("M");
-    }
-    
-    oled.setTextWrap(true); // Trả lại bình thường cho các dòng dưới
-    // Dòng 2: Chỉ số cảm biến (chia 2 cột nhỏ)
-    char buf[32];
-    oled.setCursor(0, 11);
-    if (lastSensors.temperature <= -997.0) {
-        snprintf(buf, sizeof(buf), "T: ERR  H: ERR");
+  }
+}
+
+void reconnect() {
+  if (mqttClient.connected())
+    return;
+
+  unsigned long now = millis();
+  if (now - lastReconnectAttempt > 5000) {
+    lastReconnectAttempt = now;
+    Serial.print("Attempting MQTT connection...");
+
+    String clientId = "ESP32Client-";
+    clientId += String(random(0xffff), HEX);
+
+    if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS, status_topic,
+                           0, true, "offline")) {
+      Serial.println("connected");
+      mqttClient.publish(status_topic, "online", true);
+      mqttClient.subscribe(response_topic);
     } else {
-        snprintf(buf, sizeof(buf), "T:%.1fC H:%.1f%%", lastSensors.temperature, lastSensors.humidity);
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" try again in 5 seconds");
     }
-    oled.println(buf);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+  } else {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 20);
+    display.println("Moc Dao Tu Tien");
+    display.println("Khoi dong...");
+    display.display();
+  }
+
+  // Khởi tạo Cảm biến
+  dht.begin();
+  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire)) {
+    Serial.println(F("BH1750 initialized"));
+  } else {
+    Serial.println(F("Error initializing BH1750, check wiring/address!"));
+  }
+
+  pinMode(PIN_SOIL_ADC, INPUT);
+
+  // Setup Topics
+  snprintf(telemetry_topic, sizeof(telemetry_topic), "devices/%s/telemetry",
+           DEFAULT_PLANT_CODE);
+  snprintf(status_topic, sizeof(status_topic), "devices/%s/status",
+           DEFAULT_PLANT_CODE);
+  snprintf(response_topic, sizeof(response_topic), "devices/%s/response",
+           DEFAULT_PLANT_CODE);
+
+  // Setup WiFiManager
+  WiFiManager wm;
+  // Chỉ hiển thị đúng nút cấu hình WiFi, ẩn hết các tính năng update/info khác
+  std::vector<const char *> menu = {"wifi"};
+  wm.setMenu(menu);
+
+  String apName = "MocDao-" + String(DEFAULT_PLANT_CODE).substring(0, 6);
+  bool res = wm.autoConnect(apName.c_str());
+
+  if (!res) {
+    Serial.println("Failed to connect");
+  } else {
+    Serial.println("WiFi connected!");
+
+    // Thực hiện HTTP Auth lấy Token
+    HTTPClient http;
+    String authUrl = String(SERVER_HOST) + "/api/devices/" + DEFAULT_PLANT_CODE + "/auth";
+    Serial.print("Authenticating with ");
+    Serial.println(authUrl);
     
-    oled.setCursor(0, 21);
-    if (lastSensors.soilMoisture == -999.0) {
-        snprintf(buf, sizeof(buf), "Dat: ERR L:%.0flx", lastSensors.light);
+    http.begin(authUrl);
+    http.addHeader("Content-Type", "application/json");
+    
+    String payload = "{\"verify_code\":\"" + String(DEFAULT_VERIFY_CODE) + "\"}";
+    int httpResponseCode = http.POST(payload);
+    
+    if (httpResponseCode == 200) {
+      String response = http.getString();
+      JsonDocument doc;
+      deserializeJson(doc, response);
+      jwtToken = doc["token"].as<String>();
+      Serial.println("Auth Success! Token acquired.");
     } else {
-        snprintf(buf, sizeof(buf), "Dat:%.0f%% L:%.0flx", lastSensors.soilMoisture, lastSensors.light);
+      Serial.printf("Auth Failed! Code: %d\n", httpResponseCode);
+      Serial.println(http.getString());
     }
-    oled.println(buf);
-    
-    // Dòng 3: Trạng Thái Linh Khí
-    oled.setCursor(0, 33);
-    oled.print("TT: ");
-    oled.println(getLinhKhiState(lastSensors.soilMoisture, lastSensors.temperature));
-    
-    // Dòng 4: Cảnh Giới và EXP
-    oled.setCursor(0, 45);
-    snprintf(buf, sizeof(buf), "%s: %d", cfg_rank_name.c_str(), cfg_total_exp);
-    oled.println(buf);
-    
-    // Dòng 5: Progress Bar Tu Vi
-    int nextExp = getNextRankExp(cfg_total_exp);
-    float progress = (float)cfg_total_exp / nextExp;
-    if (progress > 1.0) progress = 1.0;
-    int barWidth = (int)(progress * 128);
-    
-    // Vẽ khung thanh tiến trình ở đáy màn hình
-    oled.drawRect(0, 56, 128, 8, SSD1306_WHITE);
-    oled.fillRect(0, 56, barWidth, 8, SSD1306_WHITE);
-    
-    oled.display();
+    http.end();
+  }
+
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+
+  // Khởi tạo để gửi bản tin ngay sau khi boot
+  lastMQTTPublish = millis() - 300000UL;
 }
 
-// =============================================================
-// MQTT: Callback nhận kết quả Tu Vi/Cảnh Giới từ Broker
-// =============================================================
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    String incomingTopic = String(topic);
-    Serial.printf("[MQTT] Nhan message tu topic: %s\n", topic);
-
-    String responseTopic = "devices/" + cfg_plant_code + "/response";
-    if (incomingTopic == responseTopic) {
-        StaticJsonDocument<256> doc;
-        DeserializationError error = deserializeJson(doc, payload, length);
-        if (error) {
-            Serial.printf("[MQTT] Parse JSON response that bai: %s\n", error.c_str());
-            return;
-        }
-
-        if (doc.containsKey("total_exp")) {
-            cfg_total_exp = doc["total_exp"].as<int>();
-        }
-        if (doc.containsKey("rank_name")) {
-            cfg_rank_name = doc["rank_name"].as<String>();
-        }
-        Serial.printf("[MQTT] Cap nhat -> EXP: %d, Rank: %s\n", cfg_total_exp, cfg_rank_name.c_str());
-        
-        // Vẽ lại màn hình với Tu Vi & Cảnh Giới mới nhận được
-        drawDashboard(0);
-    }
-}
-
-// =============================================================
-// NVS: Đọc cấu hình
-// =============================================================
-bool loadConfig() {
-    prefs.begin("mocdao", true);
-    cfg_ssid       = prefs.getString("ssid", "");
-    cfg_pass       = prefs.getString("pass", "");
-    cfg_verify_code = prefs.getString("verify_code", "");
-    prefs.end();
-
-    // Dùng mã Plant Code đã nạp cứng vào firmware khi sản xuất
-    cfg_plant_code = DEFAULT_PLANT_CODE;
-
-    bool hasConfig = (cfg_ssid.length() > 0 && cfg_verify_code.length() >= 4);
-    Serial.printf("[NVS] SSID='%s' PlantCode='%s' VerifyCode='%s'\n",
-                  cfg_ssid.c_str(), cfg_plant_code.c_str(), cfg_verify_code.c_str());
-    Serial.printf("[NVS] Config %s\n", hasConfig ? "OK" : "CHUA CO");
-    return hasConfig;
-}
-
-// =============================================================
-// NVS: Lưu cấu hình
-// =============================================================
-void saveConfig(const String& ssid, const String& pass, const String& verify_code) {
-    prefs.begin("mocdao", false);
-    prefs.putString("ssid",       ssid);
-    prefs.putString("pass",       pass);
-    prefs.putString("verify_code", verify_code);
-    prefs.end();
-    Serial.println("[NVS] Da luu config!");
-}
-
-// =============================================================
-// NVS: Xoá toàn bộ cấu hình (factory reset)
-// =============================================================
-void clearConfig() {
-    prefs.begin("mocdao", false);
-    prefs.clear();
-    prefs.end();
-    Serial.println("[NVS] Da xoa config (factory reset)");
-}
-
-// =============================================================
-// CONFIG MODE: HTML trang cấu hình
-// =============================================================
-const char CONFIG_HTML[] PROGMEM = R"rawhtml(
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Moc Dao Tu Tien - Cau hinh</title>
-<style>
-  body { font-family: sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
-  h2   { color: #4ecca3; text-align: center; }
-  p    { color: #aaa; text-align: center; font-size: 13px; }
-  .box { background: #16213e; border-radius: 12px; padding: 24px;
-         max-width: 400px; margin: 0 auto; }
-  label  { display: block; margin: 12px 0 4px; color: #4ecca3; font-size: 14px; }
-  input  { width: 100%; padding: 10px; border: 1px solid #333;
-           background: #0f3460; color: #eee; border-radius: 8px;
-           box-sizing: border-box; font-size: 14px; }
-  button { width: 100%; padding: 12px; margin-top: 20px;
-           background: #4ecca3; color: #1a1a2e; border: none;
-           border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-  .note  { font-size: 12px; color: #888; margin-top: 4px; }
-  .saved { color: #4ecca3; text-align: center; font-weight: bold; }
-</style>
-</head>
-<body>
-<div class="box">
-  <h2>&#127807; Moc Dao Tu Tien</h2>
-  <p>Cau hinh thiet bi IoT</p>
-  <form action="/save" method="POST">
-    <label>WiFi SSID (Ten mang)</label>
-    <input name="ssid" type="text" placeholder="Ten WiFi nha ban" required>
-
-    <label>WiFi Password</label>
-    <input name="pass" type="password" placeholder="Mat khau WiFi">
-
-    <label>Plant Code (Ma thiet bi)</label>
-    <div style="padding: 10px; background: #0f3460; color: #4ecca3; border-radius: 8px; font-weight: bold; text-align: center;">{PLANT_CODE}</div>
-           
-    <label>Verify Code (Ma xac thuc)</label>
-    <input name="verify_code" type="text" placeholder="VD: 123456"
-           maxlength="16" required>
-    <div class="note">Lay tu Admin Dashboard → Tao thiet bi</div>
-
-    <button type="submit">Luu &amp; Khoi dong lai</button>
-  </form>
-</div>
-</body>
-</html>
-)rawhtml";
-
-const char SAVED_HTML[] PROGMEM = R"rawhtml(
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="refresh" content="5; url=/">
-<title>Da luu!</title>
-<style>
-  body { font-family: sans-serif; background: #1a1a2e; color: #eee;
-         display: flex; align-items: center; justify-content: center;
-         height: 100vh; margin: 0; }
-  .box { text-align: center; }
-  h2   { color: #4ecca3; }
-</style>
-</head>
-<body>
-<div class="box">
-  <h2>&#10003; Da luu!</h2>
-  <p>Thiet bi se khoi dong lai trong 3 giay...</p>
-</div>
-</body>
-</html>
-)rawhtml";
-
-// =============================================================
-// CONFIG MODE: Handlers web server
-// =============================================================
-void handleConfigRoot() {
-    String html = FPSTR(CONFIG_HTML);
-    html.replace("{PLANT_CODE}", DEFAULT_PLANT_CODE);
-    configServer.send(200, "text/html", html);
-}
-
-void handleConfigSave() {
-    String ssid       = configServer.arg("ssid");
-    String pass       = configServer.arg("pass");
-    String verify_code = configServer.arg("verify_code");
-
-    // Validate cơ bản
-    if (ssid.length() == 0 || verify_code.length() < 4) {
-        configServer.send(400, "text/plain", "Thieu SSID hoac Verify Code!");
-        return;
-    }
-
-    // Lưu NVS
-    saveConfig(ssid, pass, verify_code);
-
-    // Trả HTML xác nhận
-    configServer.send_P(200, "text/html", SAVED_HTML);
-
-    // Đợi 3 giây để browser nhận response xong rồi restart
-    delay(3000);
-    ESP.restart();
-}
-
-// =============================================================
-// CONFIG MODE: Khởi động AP + Web Server
-// =============================================================
-void startConfigMode() {
-    configMode = true;
-    Serial.println("[Config] Bat che do cau hinh AP...");
-
-    // Tên AP dạng "MocDao-ABCDEF" để phân biệt nhiều thiết bị
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    char apName[20];
-    snprintf(apName, sizeof(apName), "MocDao-%02X%02X%02X", mac[3], mac[4], mac[5]);
-
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(apName, "");  // Không cần mật khẩu cho AP dễ truy cập
-    delay(500);
-
-    IPAddress apIP = WiFi.softAPIP();
-    Serial.printf("[Config] AP: '%s' | IP: %s\n", apName, apIP.toString().c_str());
-
-    configServer.on("/",     HTTP_GET,  handleConfigRoot);
-    configServer.on("/save", HTTP_POST, handleConfigSave);
-    configServer.onNotFound([]() {
-        // Redirect mọi request về trang config (Captive Portal)
-        configServer.sendHeader("Location", "http://192.168.4.1/");
-        configServer.send(302, "text/plain", "");
-    });
-    configServer.begin();
-    Serial.println("[Config] Web server da bat dau");
-
-    // Hiển thị OLED hướng dẫn
-    oledClear();
-    oled.setTextSize(1);
-    oled.setCursor(0, 0);  oled.println("=== CAU HINH ===");
-    oled.setCursor(0, 14); oled.printf("WiFi: %s", apName);
-    oled.setCursor(0, 26); oled.println("Khong can mat khau");
-    oled.setCursor(0, 38); oled.println("Mo trinh duyet:");
-    oled.setCursor(0, 50); oled.println("192.168.4.1");
-    oled.display();
-}
-
-// =============================================================
-// MQTT: Tách IP/Host từ Server URL
-// =============================================================
-String getMqttHost(String url) {
-    String host = url;
-    int idx = host.indexOf("://");
-    if (idx >= 0) {
-        host = host.substring(idx + 3);
-    }
-    idx = host.indexOf(":");
-    if (idx >= 0) {
-        host = host.substring(0, idx);
-    }
-    idx = host.indexOf("/");
-    if (idx >= 0) {
-        host = host.substring(0, idx);
-    }
-    return host;
-}
-
-
-
-// =============================================================
-// MQTT: Kết nối Broker song song (Non-blocking)
-// =============================================================
-void connectMQTT() {
-    if (WiFi.status() != WL_CONNECTED) return;
-    if (mqttClient.connected()) return;
-
-    unsigned long now = millis();
-    if (now - lastMqttRetry < 10000) return; // Thử lại sau mỗi 10 giây
-    lastMqttRetry = now;
-
-    String host = getMqttHost(cfg_server);
-    Serial.printf("[MQTT] Dang ket noi toi Broker: %s:%d...\n", host.c_str(), MQTT_PORT);
-
-    mqttClient.setServer(host.c_str(), MQTT_PORT);
-    mqttClient.setCallback(mqttCallback);
-
-    // BẮT BUỘC: Thêm số random vào Client ID để không bị Broker đá văng khi dùng Public Server
-    String clientId = "MocDaoDevice-" + cfg_plant_code + "-" + String(random(1000, 9999));
-    String statusTopic = "devices/" + cfg_plant_code + "/status";
-    String responseTopic = "devices/" + cfg_plant_code + "/response";
-
-    // LWT (Last Will and Testament) set to "offline"
-    bool connected = mqttClient.connect(
-        clientId.c_str(),
-        NULL, NULL,
-        statusTopic.c_str(),
-        1, true,
-        "offline"
-    );
-
-    if (connected) {
-        Serial.println("[MQTT] KET NOI BROKER OK!");
-        mqttClient.publish(statusTopic.c_str(), "online", true);
-        mqttClient.subscribe(responseTopic.c_str(), 1);
-        Serial.printf("[MQTT] Subscribed to response: %s\n", responseTopic.c_str());
-    } else {
-        Serial.printf("[MQTT] Ket noi failure, rc=%d\n", mqttClient.state());
-    }
-}
-
-// =============================================================
-// WiFi: Thử kết nối một lần
-// =============================================================
-bool tryConnectWiFi() {
-    Serial.printf("[WiFi] Thu ket noi '%s'...\n", cfg_ssid.c_str());
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(cfg_ssid.c_str(), cfg_pass.c_str());
-
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - start > WIFI_RETRY_DELAY_MS) {
-            Serial.println("[WiFi] Het gio!");
-            return false;
-        }
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.printf("\n[WiFi] OK — IP: %s\n", WiFi.localIP().toString().c_str());
-    return true;
-}
-
-// =============================================================
-// WiFi: Thử nhiều lần, nếu hết → Config Mode
-// =============================================================
-void connectWiFiOrConfig() {
-    for (int attempt = 1; attempt <= WIFI_MAX_RETRY; attempt++) {
-        Serial.printf("[WiFi] Lan thu %d/%d\n", attempt, WIFI_MAX_RETRY);
-
-        char line2[32];
-        snprintf(line2, sizeof(line2), "Thu %d/%d...", attempt, WIFI_MAX_RETRY);
-        oledShow("Ket noi WiFi", line2, cfg_ssid.c_str());
-
-        if (tryConnectWiFi()) {
-            // Thành công
-            char ipStr[20];
-            WiFi.localIP().toString().toCharArray(ipStr, sizeof(ipStr));
-            oledShow("WiFi OK!", ipStr, cfg_plant_code.c_str());
-            delay(2000);
-            return;
-        }
-
-        // Thất bại lần này
-        WiFi.disconnect();
-        if (attempt < WIFI_MAX_RETRY) {
-            Serial.printf("[WiFi] That bai. Thu lai sau 3s...\n");
-            oledShow("WiFi that bai!", "Thu lai sau 3s...", cfg_ssid.c_str());
-            delay(3000);
-        }
-    }
-
-    // Hết tất cả retry → Config Mode
-    Serial.println("[WiFi] Khong the ket noi. Chuyen sang Config Mode.");
-    oledShow("WiFi that bai!", "Vao che do", "cau hinh...");
-    delay(2000);
-    startConfigMode();
-}
-
-// =============================================================
-// Cảm biến: Đọc tất cả (Bao gồm bộ lọc nhiễu Data Validation)
-// =============================================================
-SensorData readSensors() {
-    SensorData data;
-
-    // Đọc DHT22 thô
-    float new_temp = dht.readTemperature();
-    float new_hum  = dht.readHumidity();
-
-    // 1. Kiểm tra Mất kết nối / Đứt dây (NaN) -> Test Case 11
-    if (isnan(new_temp) || isnan(new_hum)) { 
-        data.temperature = -999.0; 
-        data.humidity    = -999.0;
-    } 
-    // 2. Kiểm tra Ngưỡng Vật lý (Out of Range) -> Test Case 7
-    else if (new_temp < -20.0 || new_temp > 80.0 || new_hum < 0.0 || new_hum > 100.0) {
-        data.temperature = -998.0; 
-        data.humidity    = -998.0;
-    }
-    // 3. Kiểm tra Nhảy vọt (Data Spike - Variance Check > 15 độ) -> Test Case 10
-    else if (lastSensors.temperature > -900.0 && abs(new_temp - lastSensors.temperature) > 15.0) {
-        data.temperature = -997.0; 
-        data.humidity    = new_hum;
-    }
-    // Dữ liệu Sạch (Clean Data)
-    else {
-        data.temperature = new_temp;
-        data.humidity    = new_hum;
-    }
-
-    // Soil Moisture (ADC → %)
-    int rawSoil = analogRead(PIN_SOIL_ADC);
-    // ADC ESP32 trả về 0 nếu chân bị chạm GND (ngắn mạch) hoặc hỏng hoàn toàn
-    if (rawSoil == 0) {
-        data.soilMoisture = -999.0; // Lỗi cảm biến
-    } else {
-        data.soilMoisture = constrain(map(rawSoil, 4095, 1500, 0, 100), 0, 100);
-    }
-
-    // TSL2561 (Lux)
-    sensors_event_t event;
-    tsl.getEvent(&event);
-    data.light = (event.light > 0) ? event.light : 0.0;
-
-    Serial.printf("[Sensor] T=%.1fC H=%.1f%% Soil=%.1f%% L=%.0flux\n",
-                  data.temperature, data.humidity, data.soilMoisture, data.light);
-    return data;
-}
-
-// =============================================================
-// MQTT: Gửi telemetry
-// =============================================================
-void sendTelemetry() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[MQTT] Mat WiFi!");
-        oledShow("Mat WiFi!", "Dang thu lai...");
-        connectWiFiOrConfig();
-        return;
-    }
-
+void loop() {
+  if (WiFi.status() == WL_CONNECTED) {
     if (!mqttClient.connected()) {
-        Serial.println("[MQTT] Chua ket noi Broker, bo qua gui.");
-        oledShow("MQTT mat ket noi!", "Dang thu lai...");
-        return;
+      reconnect();
+    } else {
+      mqttClient.loop();
     }
+  }
+
+  unsigned long now = millis();
+
+  // 1. OLED REFRESH LUÔN CHẠY MỖI GIÂY
+  if (now - lastOLEDUpdate >= 1000) {
+    lastOLEDUpdate = now;
+    updateOLED();
+  }
+
+  // 2. SENSOR POLLING CHẠY MỖI 2 GIÂY
+  if (now - lastSensorRead >= 2000) {
+    lastSensorRead = now;
 
     // Đọc cảm biến
-    SensorData sensors = readSensors();
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    currentLux = lightMeter.readLightLevel();
 
-    // Topic
-    String telemetryTopic = "devices/" + cfg_plant_code + "/telemetry";
+    int soil_raw = analogRead(PIN_SOIL_ADC);
+    currentSoil = map(soil_raw, 4095, 0, 0, 100);
+    if (currentSoil < 0)
+      currentSoil = 0;
+    if (currentSoil > 100)
+      currentSoil = 100;
 
-    // JSON payload đúng chuẩn backend: {"sensors": [{key, value}...]}
-    StaticJsonDocument<400> doc;
-    JsonArray arr = doc.createNestedArray("sensors");
+    bool dhtError = isnan(t) || isnan(h);
+    currentDHTError = dhtError;
 
-    JsonObject s1 = arr.createNestedObject();
-    s1["key"] = "temperature"; s1["value"] = sensors.temperature;
-
-    JsonObject s2 = arr.createNestedObject();
-    s2["key"] = "humidity"; s2["value"] = sensors.humidity;
-
-    JsonObject s3 = arr.createNestedObject();
-    s3["key"] = "soil_moisture"; s3["value"] = sensors.soilMoisture;
-
-    JsonObject s4 = arr.createNestedObject();
-    s4["key"] = "light"; s4["value"] = sensors.light;
-
-    String payload;
-    serializeJson(doc, payload);
-
-    // MQTT Publish
-    bool ok = mqttClient.publish(
-        telemetryTopic.c_str(),
-        payload.c_str(),
-        false   // retain = false cho telemetry
-    );
-
-    if (ok) {
-        Serial.printf("[MQTT] Telemetry sent → %s\n", telemetryTopic.c_str());
-        Serial.printf("[MQTT] Payload: %s\n", payload.c_str());
-
-        lastSensors = sensors;
-        drawDashboard(0);
-    } else {
-        Serial.println("[MQTT] Publish that bai!");
-        oledShow("MQTT Publish loi!", telemetryTopic.c_str());
-    }
-}
-
-
-
-// =============================================================
-// SETUP
-// =============================================================
-void setup() {
-    setCpuFrequencyMhz(80); // Hạ xung nhịp xuống 80MHz giúp giảm nhiệt độ đáng kể
-    Serial.begin(115200);
-    delay(1000); // Chờ 1 giây để đảm bảo Serial Terminal của Wokwi bắt kịp mạch
-    Serial.println("\n\n[Boot] Moc Dao Tu Tien khoi dong...");
-
-    // Khởi tạo I2C và OLED
-    Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
-    if (oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-        oledOk = true;
-        oledShow("Moc Dao Tu Tien", "v2.0 Khoi dong...");
-    } else {
-        Serial.println("[OLED] Khong tim thay man hinh!");
+    if (!dhtError) {
+      currentTemp = t;
+      currentHum = h;
     }
 
-    // Khởi tạo DHT22
-    dht.begin();
+    // 3. KIỂM TRA ĐIỀU KIỆN PUBLISH
+    bool shouldPublish = false;
 
-    // Khởi tạo TSL2561
-    if (tsl.begin()) {
-        tsl.enableAutoRange(true);
-        tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_101MS);
-    } else {
-        Serial.println("[TSL] Khong tim thay cam bien anh sang!");
+    // Điều kiện A: Heartbeat (5 phút)
+    if (now - lastMQTTPublish >= 300000UL) {
+      shouldPublish = true;
     }
 
-    delay(1000);
-
-#ifdef WOKWI_SIMULATION
-    // ── Chế độ giả lập Wokwi ──────────────────────────────────
-    // Bỏ qua NVS, dùng thẳng credentials từ secrets.h
-    Serial.println("[SIM] WOKWI_SIMULATION mode — dung truc tiep secrets.h");
-    cfg_ssid       = WIFI_SSID;
-    cfg_pass       = WIFI_PASS;
-    cfg_plant_code = DEFAULT_PLANT_CODE;
-    cfg_verify_code = DEFAULT_VERIFY_CODE;
-    cfg_server     = SERVER_HOST;
-    oledShow("WOKWI SIM MODE", cfg_plant_code.c_str(), "Dang ket noi WiFi...");
-    connectWiFiOrConfig();
-    if (WiFi.status() == WL_CONNECTED) {
-        lastSensors = readSensors();
+    // Điều kiện B: Thay đổi trạng thái lỗi DHT
+    if (dhtError != lastDHTError) {
+      shouldPublish = true;
     }
-#else
-    // ── Chế độ thường: đọc cấu hình từ NVS ───────────────────
-    bool hasConfig = loadConfig();
 
-    if (!hasConfig) {
-        // Lần đầu dùng hoặc chưa cấu hình → Config Mode luôn
-        Serial.println("[Boot] Chua co config → Config Mode");
-        oledShow("Chua co cau hinh!", "Vao Config Mode...");
-        delay(2000);
-        startConfigMode();
-    } else {
-        // Có config → thử kết nối WiFi
-        connectWiFiOrConfig();
-        if (WiFi.status() == WL_CONNECTED) {
-            lastSensors = readSensors();
+    // Điều kiện C & D: Biến thiên nhiệt độ >= 0.5C hoặc độ ẩm >= 3%
+    if (!dhtError && lastSentTemp != -999.0) {
+      if (abs(currentTemp - lastSentTemp) >= 0.5)
+        shouldPublish = true;
+      if (abs(currentHum - lastSentHum) >= 3.0)
+        shouldPublish = true;
+    }
+
+    // Gửi ngay lần đầu tiên có dữ liệu hợp lệ
+    if (lastSentTemp == -999.0 && !dhtError) {
+      shouldPublish = true;
+    }
+
+    // 4. THỰC THI PUBLISH NẾU ĐẠT ĐIỀU KIỆN
+    if (shouldPublish) {
+      JsonDocument doc;
+
+      // Dùng JWT Token thay cho Verify Code cũ
+      doc["token"] = jwtToken;
+
+      JsonArray sensors = doc["sensors"].to<JsonArray>();
+
+      JsonObject tempObj = sensors.add<JsonObject>();
+      tempObj["key"] = "temperature";
+      if (dhtError)
+        tempObj["value"] = nullptr;
+      else
+        tempObj["value"] = currentTemp;
+
+      JsonObject humObj = sensors.add<JsonObject>();
+      humObj["key"] = "humidity";
+      if (dhtError)
+        humObj["value"] = nullptr;
+      else
+        humObj["value"] = currentHum;
+
+      JsonObject soilObj = sensors.add<JsonObject>();
+      soilObj["key"] = "soil_moisture";
+      soilObj["value"] = currentSoil;
+
+      JsonObject lightObj = sensors.add<JsonObject>();
+      lightObj["key"] = "light";
+      lightObj["value"] = currentLux;
+
+      String payload;
+      serializeJson(doc, payload);
+
+      Serial.print("Event Triggered! Publish message: ");
+      Serial.println(payload);
+
+      if (mqttClient.connected()) {
+        if (mqttClient.publish(telemetry_topic, payload.c_str())) {
+          // Lưu lại lịch sử để tính toán cho lần sau
+          lastMQTTPublish = now;
+          lastDHTError = dhtError;
+          if (!dhtError) {
+            lastSentTemp = currentTemp;
+            lastSentHum = currentHum;
+          }
         }
-    }
-#endif
-}
-
-// =============================================================
-// LOOP
-// =============================================================
-void loop() {
-    if (configMode) {
-        // Đang ở Config Mode → chỉ handle web requests
-        configServer.handleClient();
-        return;
-    }
-
-    // ── MQTT Connection maintenance ───────────────────────────
-    connectMQTT();
-    mqttClient.loop();
-
-    // ── Telemetry Mode ────────────────────────────────────────
-    unsigned long now = millis();
-
-    // Chưa đến 60 giây → hiển thị đồng hồ đếm ngược
-    if (now - lastSendTime < TELEMETRY_INTERVAL_MS) {
-        if (oledOk) {
-            unsigned long remain = (TELEMETRY_INTERVAL_MS - (now - lastSendTime)) / 1000;
-
-            // Chỉ cập nhật OLED mỗi giây để tránh nhấp nháy
-            static unsigned long lastOledUpdate = 0;
-            if (now - lastOledUpdate >= 1000) {
-                lastOledUpdate = now;
-                drawDashboard(remain);
-            }
+      } else {
+        // Dù MQTT đứt kết nối, ta vẫn cập nhật lại State để tránh bị kẹt trong
+        // logic tính sai lệch khiến payload in ra Serial liên tục mỗi 2s.
+        lastMQTTPublish = now;
+        lastDHTError = dhtError;
+        if (!dhtError) {
+          lastSentTemp = currentTemp;
+          lastSentHum = currentHum;
         }
-        delay(100);
-        return;
+      }
     }
-
-    // Đến lúc gửi rồi
-    lastSendTime = now;
-    sendTelemetry();
+  }
 }
