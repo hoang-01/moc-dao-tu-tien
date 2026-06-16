@@ -44,9 +44,9 @@ Thiết kế chuẩn hóa quan hệ (RDBMS) gồm **9 bảng** dữ liệu tối
 
 ### 2.3. Phát triển Dịch vụ & Logic Tính EXP (Gamification Engine)
 Xây dựng thành công bộ dịch vụ thông minh tại thư mục `app/services/`:
-*   **Cơ chế phân loại chỉ số:** Tự động tính toán độ lệch ra ngoài khoảng lý tưởng của 4 cảm biến theo 5 cấp độ: `EXCELLENT` (0% lệch), `GOOD` (≤10%), `FAIR` (≤25%), `POOR` (≤50%), `DANGER` (>50%).
-*   **Thuật toán tổng hợp chất lượng:** Lấy **mức xấu nhất** trong tất cả cảm biến làm môi trường tổng hợp (VD: độ ẩm GOOD nhưng ánh sáng POOR -> Môi trường tổng hợp là POOR).
-*   **Cơ chế chống Spam (Anti-Spam):** Giới hạn chu kỳ thưởng Tu Vi tối thiểu 55 giây. Nếu thiết bị spam dữ liệu quá nhanh, dữ liệu vẫn được lưu lại nhưng Tu Vi sẽ không được tính để đảm bảo công bằng.
+*   **Cơ chế phân loại chỉ số:** Tự động tính toán độ lệch ra ngoài khoảng lý tưởng của các cảm biến chính (Nhiệt độ, Độ ẩm không khí, Độ ẩm đất) theo 5 cấp độ: `EXCELLENT` (0% lệch), `GOOD` (≤10%), `FAIR` (≤25%), `POOR` (≤50%), `DANGER` (>50%). Loại trừ cảm biến ánh sáng khỏi logic phân loại này.
+*   **Thuật toán tổng hợp chất lượng:** Lấy **mức xấu nhất** trong các cảm biến chính (không tính cảm biến ánh sáng) làm môi trường tổng hợp (VD: độ ẩm đất GOOD nhưng nhiệt độ không khí POOR -> Môi trường tổng hợp là POOR).
+*   **Cơ chế chống Spam (Anti-Spam):** Chuyển đổi từ cơ chế chặn cứng 55 giây thành cơ chế **Rolling Window Rate Limit (Giới hạn tỷ lệ cửa sổ trượt)**. Dữ liệu cảm biến gửi lên vẫn luôn được ghi nhận vào DB, nhưng hệ thống sẽ chặn cộng điểm Tu Vi (EXP) nếu thiết bị gửi dữ liệu liên tiếp >= 5 lần trong vòng 5 giây gần nhất.
 *   **Đột phá Cảnh Giới:** Hỗ trợ thuật toán kiểm tra đột phá vượt cấp tự động ngay khi EXP nhảy vọt qua nhiều mốc trong một chu kỳ.
 *   **SSE Real-time Broadcast:** Tích hợp đẩy trực tiếp dữ liệu thay đổi lên Dashboard thông qua `sse_manager` ngay khi thu nhận tín hiệu.
 
@@ -57,8 +57,8 @@ Xây dựng thành công bộ dịch vụ thông minh tại thư mục `app/serv
 ### 2.5. Nâng cấp Gamification & Đồng bộ hóa Hệ thống (Cập nhật mới)
 *   **Offline Penalty & Background Scheduler:** Tích hợp bộ đếm Heartbeat. Nếu thiết bị IoT mất kết nối vượt ngưỡng 6 phút (360 giây), hệ thống ngầm tự động kích hoạt trạng thái "Đóng băng Tu Vi" (`OFFLINE_PENALTY`), đảm bảo công bằng cho game và chống gian lận.
 *   **Đồng bộ hóa Dữ liệu 2 chiều (OLED Support):** 
-    *   **MQTT:** Bổ sung luồng Publish JSON (`total_exp`, `rank_name`) ngược về topic `devices/{plant_code}/display` ngay khi nhận Telemetry.
-    *   **REST HTTP:** Đóng gói thông số Tu Vi vào gói Response trả về. Hỗ trợ hiển thị độc lập không phụ thuộc giao thức.
+    *   **MQTT:** Bổ sung luồng Publish JSON (`total_exp`, `rank_name`, `status`, `message`) ngược về topic `devices/{plant_code}/response` ngay khi nhận Telemetry để cập nhật trạng thái hiển thị của OLED.
+    *   **REST HTTP Auth:** Cập nhật endpoint `/api/devices/{plant_code}/auth` trả về đầy đủ `total_exp` và `rank_name` trực tiếp từ database cùng với `token` và `thresholds` lý tưởng ngay khi mạch khởi động.
 *   **Tối ưu Bảng Xếp Hạng & Hỗ trợ Đa chậu:** Lọc bỏ hoàn toàn các tài khoản Admin (Role Filtering) khỏi cuộc đua Tu Vi. Vá lỗi `MultipleResultsFound` để hệ thống tương thích 100% với kiến trúc "1 Người dùng - Nhiều Chậu cây".
 
 ---

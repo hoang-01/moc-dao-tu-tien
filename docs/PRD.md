@@ -99,16 +99,16 @@
 
 | Mục | Nội dung |
 |---|---|
-| **Mô tả** | Thiết bị IoT thu thập dữ liệu các chỉ số môi trường sống của cây, gửi lên hệ thống liên tục |
-| **Tần suất** | Liên tục theo chu kỳ |
-| **Ghi chú** | Loại cảm biến và chỉ số cụ thể sẽ được quy định trong tài liệu kỹ thuật (System Architecture) |
+| **Mô tả** | Thiết bị IoT thu thập dữ liệu các chỉ số môi trường sống của cây (nhiệt độ, độ ẩm không khí, độ ẩm đất, ánh sáng) và gửi lên hệ thống |
+| **Cơ chế truyền** | **Delta Sync (Truyền chênh lệch)**: Thiết bị không gửi dữ liệu liên tục định kỳ mà giữ kết nối WiFi và chỉ phát MQTT khi chỉ số thay đổi vượt ngưỡng (nhiệt độ >= 0.5C, độ ẩm >= 3%), hoặc khi thay đổi trạng thái lỗi DHT. Gói tin giữ nhịp kết nối (Heartbeat) được gửi định kỳ mỗi 5 phút. |
+| **Cảm biến ánh sáng** | Dữ liệu cảm biến ánh sáng BH1750 được gửi thô lên hệ thống và lưu trữ, nhưng không tham gia đánh giá chất lượng hay logic lỗi để tránh lỗi phần cứng làm gián đoạn tu luyện. |
 
 **User Stories:**
 - Là người dùng, tôi muốn xem các chỉ số môi trường hiện tại của cây trên Dashboard.
 
 **Tiêu chí chấp nhận:**
-- [ ] Cảm biến đo được các chỉ số môi trường và gửi dữ liệu liên tục lên hệ thống.
-- [ ] Dữ liệu được cập nhật trên Dashboard với độ trễ chấp nhận được.
+- [ ] Cảm biến đo được các chỉ số môi trường và gửi dữ liệu lên hệ thống thông qua cơ chế Delta Sync.
+- [ ] Dữ liệu được cập nhật trên Dashboard thời gian thực với độ trễ tối thiểu.
 
 ---
 
@@ -117,7 +117,8 @@
 | Mục | Nội dung |
 |---|---|
 | **Mô tả** | Hệ thống so sánh dữ liệu thực tế với ngưỡng lý tưởng theo loại cây và phân loại chất lượng môi trường thành các mức |
-| **Phân loại** | Từ mức tốt đến mức nguy hiểm (cụ thể định nghĩa trong tài liệu kỹ thuật) |
+| **Phân loại** | 5 mức cục bộ: `EXCELLENT` (đối ứng hiển thị `OPTIMAL`), `GOOD`, `FAIR`, `POOR`, `DANGER`. |
+| **Ràng buộc** | Lấy mức xấu nhất trong các cảm biến chính (Nhiệt độ, Độ ẩm không khí, Độ ẩm đất) để làm chất lượng chung. Loại trừ hoàn toàn cảm biến ánh sáng khỏi thuật toán này. |
 | **Cơ sở** | Ngưỡng lý tưởng được cấu hình theo loại cây, có thể chỉnh sửa bởi Admin |
 
 **User Stories:**
@@ -125,8 +126,8 @@
 - Là người dùng, tôi muốn thấy đánh giá chất lượng dưới dạng trực quan (màu sắc, icon) để nắm bắt nhanh.
 
 **Tiêu chí chấp nhận:**
-- [ ] Hệ thống phân loại đúng chất lượng môi trường theo ngưỡng của loại cây đã chọn.
-- [ ] Đánh giá được hiển thị bằng màu sắc và icon trực quan trên Dashboard.
+- [ ] Hệ thống phân loại đúng chất lượng môi trường theo ngưỡng của loại cây đã chọn, không tính cảm biến ánh sáng.
+- [ ] Đánh giá được hiển thị bằng màu sắc và icon trực quan trên Dashboard và mạch cục bộ.
 
 ---
 
@@ -135,9 +136,11 @@
 | Mục | Nội dung |
 |---|---|
 | **Mô tả** | Điểm Tu Vi được tích lũy liên tục theo chất lượng môi trường mỗi chu kỳ. Khi đạt đủ mốc Tu Vi, cây đột phá Cảnh Giới lên bậc cao hơn |
-| **Quy tắc cộng/trừ** | Môi trường tốt → **cộng điểm**; Môi trường xấu/nguy hiểm → **trừ điểm** |
-| **Đột phá Cảnh Giới** | Khi Tu Vi đạt đủ mốc quy định → cây tự động thăng cấp, tạo mục tiêu ngắn hạn cho người dùng |
-| **Cấu hình** | Hệ số cộng/trừ và mốc Cảnh Giới được Admin cấu hình qua giao diện |
+| **Quy tắc cộng/trừ** | Môi trường tốt (Excellent/Good) → **cộng điểm**; Môi trường trung bình (Fair) → **giữ nguyên**; Môi trường xấu/nguy hiểm (Poor/Danger) → **trừ điểm** |
+| **Chu kỳ tích lũy** | Tích lũy mịn cục bộ mỗi 6 giây trên mạch (Excellent: +1.0, Good: +0.5, Fair: +0.0, Poor: -0.3, Danger: -0.8 EXP); Đồng bộ batch định kỳ trên Backend mỗi 1 phút (ở môi trường phát triển). |
+| **Chống Spam (Anti-Spam)** | **Rate Limit Rolling Window**: Hệ thống chỉ chặn cộng điểm nếu thiết bị gửi dữ liệu lên >= 5 lần trong 5 giây gần nhất, thay vì chặn cứng 55 giây như cũ. |
+| **Đóng băng Tu Vi** | Điểm Tu Vi bị đóng băng (cộng 0 EXP) ngay lập tức nếu thiết bị gặp lỗi cảm biến DHT (`SENSOR_ERROR`) hoặc mất kết nối quá 6 phút (`OFFLINE_PENALTY`). |
+| **Đột phá Cảnh Giới** | Khi Tu Vi đạt đủ mốc quy định → cây tự động thăng cấp. Hỗ trợ thuật toán đột phá vượt cấp tự động khi EXP tăng vọt qua nhiều mốc. |
 
 **User Stories:**
 - Là người dùng, tôi muốn thấy tổng điểm Tu Vi của cây để biết mình chăm sóc tốt đến mức nào.
@@ -146,8 +149,51 @@
 - Là người dùng, tôi muốn được thông báo khi cây đột phá Cảnh Giới để cảm thấy thành tựu.
 
 **Tiêu chí chấp nhận:**
-- [ ] Điểm Tu Vi được cộng/trừ chính xác theo chất lượng môi trường mỗi chu kỳ.
-- [ ] Cây t### F-08: Bảng xếp hạng (Leaderboard)
+- [ ] Điểm Tu Vi được cộng/trừ chính xác theo chất lượng môi trường mỗi chu kỳ 6s (mạch) hoặc 1 phút (server).
+- [ ] Điểm Tu Vi bị đóng băng khi có sự cố cảm biến hoặc thiết bị offline quá 6 phút.
+- [ ] Cơ chế Anti-Spam cho phép gửi liên tục cập nhật trạng thái nhưng hạn chế spam điểm vượt mức (5 lần/5s).
+
+---
+
+### F-06: Màn hình hiển thị OLED & Hoạt ảnh Trạng thái
+
+| Mục | Nội dung |
+|---|---|
+| **Mô tả** | Màn hình OLED trên mạch hiển thị trạng thái tối giản và hoạt ảnh mầm cây đung đưa sống động tương thích với tiến trình Tu Tiên của cây trồng |
+| **Màn hình khởi động** | Hiển thị chữ "MOC DAO TU TIEN", tiến trình tải 0% đến 100% và biểu tượng mầm cây chuyển động trong 2 giây. |
+| **Màn hình WiFi** | **Đang kết nối**: hiển thị SSID và cột sóng WiFi động.<br>**Kết nối lỗi**: thông báo thất bại và bộ đếm ngược 3 giây trước lần thử tiếp theo.<br>**AP Config Portal**: hiển thị tên Access Point của mạch và IP cấu hình mặc định (192.168.4.1). |
+| **Màn hình chính** | Hiển thị tối giản gồm 2 dòng thông tin:<br>1. Trạng thái chất lượng hiện tại: `TT: OPTIMAL/GOOD/FAIR/...` và hệ số EXP biến động (`+1.0`, `+0.5`...).<br>2. Cảnh giới và EXP dạng số thực: `Luyen Khi : 123.5`. |
+| **Hoạt ảnh mầm cây** | Một mầm cây động nằm ở 1/2 phía dưới màn hình:<br>- **OPTIMAL/GOOD**: Mầm cây đung đưa vui vẻ, có các hạt linh khí bay lên tượng trưng cho sự tu luyện.<br>- **FAIR/POOR**: Mầm cây đứng yên (POOR thì lá rủ nhẹ).<br>- **DANGER/ERROR**: Mầm cây héo úa, cúi đầu kèm biểu tượng cảnh báo nhấp nháy.<br>- **OFFLINE**: Mầm cây héo úa kèm biểu tượng sóng WiFi bị gạch chéo nhấp nháy. |
+
+**User Stories:**
+- Là người dùng, tôi muốn màn hình thiết bị hiển thị sinh động và phản ánh đúng trạng thái tu luyện của cây trồng.
+- Là người dùng, tôi muốn dễ dàng cấu hình WiFi cho thiết bị thông qua các thông tin hướng dẫn rõ ràng trên màn hình khi kết nối lỗi.
+
+**Tiêu chí chấp nhận:**
+- [ ] Màn hình khởi động, WiFi và màn hình cấu hình hiển thị chính xác các hoạt ảnh và thông số.
+- [ ] Mầm cây đung đưa và linh khí bay lên tương ứng đúng với trạng thái môi trường hiện tại.
+
+---
+
+### F-07: Cơ chế Reconnect & Đồng bộ Database
+
+| Mục | Nội dung |
+|---|---|
+| **Mô tả** | Đảm bảo dữ liệu trên màn hình OLED và Database luôn đồng nhất khi thiết bị mất điện, mất kết nối mạng và khôi phục trở lại |
+| **Xác thực lúc khởi động** | Khi bật nguồn, mạch gọi REST HTTP Auth lên server để lấy JWT Token và đồng bộ ngay giá trị `total_exp` và `rank_name` hiện thời từ database. |
+| **Tự động Reconnect** | Khi mất WiFi, mạch tự động kích hoạt tiến trình thử kết nối lại 3 lần (mỗi lần chờ tối đa 15s). Nếu thất bại cả 3 lần mới chuyển sang AP Config Portal. |
+| **Khôi phục MQTT** | Khi kết nối MQTT được khôi phục, mạch tự động reset bộ đếm gửi tin về `0` để thực hiện gửi telemetry cập nhật chỉ số ngay lập tức. Server nhận tin sẽ tính toán và phản hồi lại giá trị EXP/Rank mới nhất từ DB giúp OLED cập nhật đồng nhất ngay. |
+
+**User Stories:**
+- Là người dùng, tôi muốn EXP trên thiết bị không bị reset về 0 khi mất nguồn, và tự động đồng bộ lại chính xác với dữ liệu lưu trên máy chủ khi có mạng lại.
+
+**Tiêu chí chấp nhận:**
+- [ ] Thiết bị đồng bộ đúng EXP và Cảnh giới từ DB ngay khi thực hiện HTTP Auth thành công.
+- [ ] Thiết bị tự động cập nhật lại thông số mới nhất sau khi khôi phục mạng mà không cần chờ 5 phút.
+
+---
+
+### F-08: Bảng xếp hạng (Leaderboard)
 
 | Mục | Nội dung |
 |---|---|
