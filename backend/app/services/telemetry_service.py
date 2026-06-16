@@ -120,4 +120,6 @@ async def process_telemetry(
     return {
         "status": "ok",
         "message": f"Xử lý thành công. Chất lượng: {overall_quality}",
+        "total_exp": plant.total_exp,
+        "rank_name": plant.current_rank.name if plant.current_rank else "Phàm Mộc",
     }

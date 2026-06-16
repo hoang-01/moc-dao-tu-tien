@@ -54,6 +54,13 @@ Xây dựng thành công bộ dịch vụ thông minh tại thư mục `app/serv
 *   **Dockerfile:** Xây dựng quy trình **multi-stage build** sử dụng image `ghcr.io/astral-sh/uv` ở stage build để cài đặt thư viện và copy `.venv` sang runtime Python-Alpine siêu nhẹ, giúp Docker Image có kích thước cực kỳ tối giản.
 *   **Docker Compose:** Cấu hình tự động liên kết 3 container: PostgreSQL Database, Eclipse Mosquitto MQTT Broker, và FastAPI Backend. Tự động kiểm tra trạng thái DB sẵn sàng mới chạy Backend, tự động chạy Alembic Migration nâng cấp bảng và nạp dữ liệu Seed mẫu tức thì.
 
+### 2.5. Nâng cấp Gamification & Đồng bộ hóa Hệ thống (Cập nhật mới)
+*   **Offline Penalty & Background Scheduler:** Tích hợp bộ đếm Heartbeat. Nếu thiết bị IoT mất kết nối vượt ngưỡng 6 phút (360 giây), hệ thống ngầm tự động kích hoạt trạng thái "Đóng băng Tu Vi" (`OFFLINE_PENALTY`), đảm bảo công bằng cho game và chống gian lận.
+*   **Đồng bộ hóa Dữ liệu 2 chiều (OLED Support):** 
+    *   **MQTT:** Bổ sung luồng Publish JSON (`total_exp`, `rank_name`) ngược về topic `devices/{plant_code}/display` ngay khi nhận Telemetry.
+    *   **REST HTTP:** Đóng gói thông số Tu Vi vào gói Response trả về. Hỗ trợ hiển thị độc lập không phụ thuộc giao thức.
+*   **Tối ưu Bảng Xếp Hạng & Hỗ trợ Đa chậu:** Lọc bỏ hoàn toàn các tài khoản Admin (Role Filtering) khỏi cuộc đua Tu Vi. Vá lỗi `MultipleResultsFound` để hệ thống tương thích 100% với kiến trúc "1 Người dùng - Nhiều Chậu cây".
+
 ---
 
 ## 3. KẾT QUẢ KIỂM THỬ CHẤT LƯỢNG (QUALITY ASSURANCE)
