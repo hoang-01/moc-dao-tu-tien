@@ -5,10 +5,11 @@
 #include <ArduinoJson.h>
 #include <BH1750.h>
 #include <DHT.h>
+#include <HTTPClient.h>
 #include <PubSubClient.h>
 #include <WiFiManager.h>
 #include <Wire.h>
-#include <HTTPClient.h>
+
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -29,7 +30,7 @@ unsigned long lastReconnectAttempt =
     0xFFFFFFFF - 5000; // Để nó connect ngay lập tức lần đầu
 
 // Data từ Server
-long total_exp = 0;
+double total_exp = 0.0;
 String rank_name = "Chưa rõ";
 String currentStatus = "WAIT";
 String serverMessage = "";
@@ -44,6 +45,9 @@ float currentHum = 0.0;
 float currentLux = 0.0;
 int currentSoil = 0;
 bool currentDHTError = false;
+unsigned long lastLocalExpAccumulate = 0;
+bool bh1750_detected = false;
+int animFrame = 0;
 
 // Topics
 char telemetry_topic[100];
@@ -53,34 +57,356 @@ char response_topic[100];
 // JWT Token
 String jwtToken = "";
 
+struct PlantThresholds {
+  float tempMin = 0.0;
+  float tempMax = 0.0;
+  float humMin = 0.0;
+  float humMax = 0.0;
+  float soilMin = 0.0;
+  float soilMax = 0.0;
+  float lightMin = 0.0;
+  float lightMax = 0.0;
+  bool hasThresholds = false;
+};
+PlantThresholds currentThresholds;
+
+String classifySensorQuality(float value, float idealMin, float idealMax) {
+  float idealRange = idealMax - idealMin;
+  if (idealRange <= 0)
+    idealRange = 1.0;
+
+  if (value >= idealMin && value <= idealMax) {
+    return "EXCELLENT";
+  }
+
+  float deviation = 0.0;
+  if (value < idealMin) {
+    deviation = (idealMin - value) / idealRange;
+  } else {
+    deviation = (value - idealMax) / idealRange;
+  }
+
+  if (deviation <= 0.10)
+    return "GOOD";
+  else if (deviation <= 0.25)
+    return "FAIR";
+  else if (deviation <= 0.50)
+    return "POOR";
+  else
+    return "DANGER";
+}
+
+String getLocalOverallQuality() {
+  if (currentDHTError) {
+    return "ERROR";
+  }
+  if (!currentThresholds.hasThresholds) {
+    return "FAIR";
+  }
+
+  String qTemp = classifySensorQuality(currentTemp, currentThresholds.tempMin,
+                                       currentThresholds.tempMax);
+  String qHum = classifySensorQuality(currentHum, currentThresholds.humMin,
+                                      currentThresholds.humMax);
+  String qSoil = classifySensorQuality(currentSoil, currentThresholds.soilMin,
+                                       currentThresholds.soilMax);
+
+  int worstIdx = 0;
+  String qualities[3] = {qTemp, qHum, qSoil};
+  for (int i = 0; i < 3; i++) {
+    int idx = 2; // Default FAIR
+    if (qualities[i] == "EXCELLENT")
+      idx = 0;
+    else if (qualities[i] == "GOOD")
+      idx = 1;
+    else if (qualities[i] == "FAIR")
+      idx = 2;
+    else if (qualities[i] == "POOR")
+      idx = 3;
+    else if (qualities[i] == "DANGER")
+      idx = 4;
+
+    if (idx > worstIdx) {
+      worstIdx = idx;
+    }
+  }
+
+  if (worstIdx == 0)
+    return "EXCELLENT";
+  if (worstIdx == 1)
+    return "GOOD";
+  if (worstIdx == 2)
+    return "FAIR";
+  if (worstIdx == 3)
+    return "POOR";
+  return "DANGER";
+}
+
+String getLocalRank(double exp) {
+  if (exp >= 30000.0)
+    return "Do Kiep";
+  if (exp >= 15000.0)
+    return "Dai Thua";
+  if (exp >= 8000.0)
+    return "Hoa Than";
+  if (exp >= 4000.0)
+    return "Nguyen Anh";
+  if (exp >= 1500.0)
+    return "Kim Dan";
+  if (exp >= 500.0)
+    return "Truc Co";
+  if (exp >= 100.0)
+    return "Luyen Khi";
+  return "Pham Moc";
+}
+
+bool isEnvironmentOptimal() {
+  if (!currentThresholds.hasThresholds)
+    return false;
+  return getLocalOverallQuality() == "EXCELLENT";
+}
+
+void drawBootScreen(int frame) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Title
+  display.setCursor(16, 5);
+  display.println("MOC DAO TU TIEN");
+
+  display.setCursor(30, 20);
+  display.printf("Booting... %d%%", frame * 10);
+
+  // Progress bar
+  int width = (frame * 100) / 10;
+  display.drawRect(14, 35, 100, 8, SSD1306_WHITE);
+  display.fillRect(14, 35, width, 8, SSD1306_WHITE);
+
+  // Sprout animation above progress bar
+  int plantX = 14 + width;
+  if (plantX > 109)
+    plantX = 109;
+
+  display.drawLine(plantX, 32, plantX, 26, SSD1306_WHITE);
+  if ((frame / 2) % 2 == 0) {
+    display.drawLine(plantX, 29, plantX - 3, 27, SSD1306_WHITE);
+  } else {
+    display.drawLine(plantX, 29, plantX + 3, 27, SSD1306_WHITE);
+  }
+
+  display.display();
+}
+
+void drawWifiConnectingScreen(int attempt, int frame) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(16, 5);
+  display.println("=== WIFI CONNECT ===");
+
+  display.setCursor(0, 20);
+  display.printf("SSID: %s", WiFi.SSID().substring(0, 15).c_str());
+  display.setCursor(0, 32);
+  display.printf("Attempt %d/3...", attempt);
+
+  // Animate WiFi symbol
+  int x = 64;
+  int y = 55;
+  display.fillCircle(x, y, 2, SSD1306_WHITE);
+  int step = frame % 4;
+  if (step >= 1) {
+    display.drawCircleHelper(x, y, 6, 1, SSD1306_WHITE);
+    display.drawCircleHelper(x, y, 6, 2, SSD1306_WHITE);
+  }
+  if (step >= 2) {
+    display.drawCircleHelper(x, y, 12, 1, SSD1306_WHITE);
+    display.drawCircleHelper(x, y, 12, 2, SSD1306_WHITE);
+  }
+  if (step >= 3) {
+    display.drawCircleHelper(x, y, 18, 1, SSD1306_WHITE);
+    display.drawCircleHelper(x, y, 18, 2, SSD1306_WHITE);
+  }
+
+  display.display();
+}
+
+void drawWifiRetryScreen(int attempt, int secondsRemaining) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(16, 5);
+  display.println("=== WIFI RETRY ===");
+
+  display.setCursor(0, 20);
+  display.printf("Attempt %d failed!", attempt);
+  display.setCursor(0, 35);
+  display.printf("Retrying in %d seconds", secondsRemaining);
+
+  // Draw warning symbol
+  display.drawTriangle(105, 55, 115, 35, 125, 55, SSD1306_WHITE);
+  display.setCursor(113, 40);
+  display.print("!");
+
+  display.display();
+}
+
+void configModeCallback(WiFiManager *myWiFiManager) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("=== WIFI CONFIG ===");
+  display.println("");
+  display.printf("AP: %s\n", myWiFiManager->getConfigPortalSSID().c_str());
+  display.println("IP: 192.168.4.1");
+  display.println("");
+  display.println("Connect to ESP32 AP");
+  display.println("to configure WiFi...");
+  display.display();
+}
+
+void drawSproutAnimation(String quality, bool isOffline, int frame) {
+  // Ground line
+  display.drawFastHLine(48, 60, 32, SSD1306_WHITE);
+
+  if (isOffline) {
+    // Wilted plant + offline icon
+    display.drawLine(64, 60, 61, 53, SSD1306_WHITE);
+    display.drawLine(61, 53, 55, 50, SSD1306_WHITE);
+    display.drawLine(61, 53, 54, 57, SSD1306_WHITE);
+    display.drawLine(55, 50, 50, 53, SSD1306_WHITE);
+
+    // Flashing Offline WiFi symbol (slashed)
+    if ((frame / 2) % 2 == 0) {
+      int wx = 100;
+      int wy = 45;
+      display.fillCircle(wx, wy, 2, SSD1306_WHITE);
+      display.drawCircleHelper(wx, wy, 6, 1, SSD1306_WHITE);
+      display.drawCircleHelper(wx, wy, 6, 2, SSD1306_WHITE);
+      display.drawCircleHelper(wx, wy, 12, 1, SSD1306_WHITE);
+      display.drawCircleHelper(wx, wy, 12, 2, SSD1306_WHITE);
+      display.drawLine(90, 35, 110, 55, SSD1306_WHITE);
+    }
+    return;
+  }
+
+  if (quality == "ERROR") {
+    // Wilted plant + warning sign
+    display.drawLine(64, 60, 61, 53, SSD1306_WHITE);
+    display.drawLine(61, 53, 55, 50, SSD1306_WHITE);
+    display.drawLine(61, 53, 54, 57, SSD1306_WHITE);
+    display.drawLine(55, 50, 50, 53, SSD1306_WHITE);
+
+    if ((frame / 2) % 2 == 0) {
+      display.drawTriangle(95, 50, 105, 30, 115, 50, SSD1306_WHITE);
+      display.setCursor(103, 35);
+      display.print("!");
+    }
+    return;
+  }
+
+  if (quality == "EXCELLENT" || quality == "GOOD") {
+    // Swaying happy sprout
+    int swayOffsets[4] = {-1, 0, 1, 0};
+    int leafOffsets[4] = {-1, 1, 1, -1};
+    int sway = swayOffsets[frame % 4];
+    int leafSway = leafOffsets[frame % 4];
+
+    display.drawLine(64, 60, 64, 52, SSD1306_WHITE);
+    display.drawLine(64, 52, 64 + sway, 44, SSD1306_WHITE);
+    display.drawLine(64, 52, 56, 48 - leafSway, SSD1306_WHITE);
+    display.drawLine(64 + sway, 44, 74 + sway, 40 + leafSway, SSD1306_WHITE);
+
+    // Rising particles of energy
+    int numParticles = (quality == "EXCELLENT") ? 3 : 1;
+    if (numParticles >= 1) {
+      int p1_y = 58 - ((frame % 10) * 3);
+      int p1_x = 64 - 10 + ((frame % 10) % 3);
+      if (p1_y > 24 && p1_y < 60) {
+        display.drawPixel(p1_x, p1_y, SSD1306_WHITE);
+      }
+    }
+    if (numParticles >= 2) {
+      int p2_y = 58 - (((frame + 4) % 10) * 3);
+      int p2_x = 64 + 8 - (((frame + 4) % 10) % 3);
+      if (p2_y > 24 && p2_y < 60) {
+        display.drawPixel(p2_x, p2_y, SSD1306_WHITE);
+      }
+    }
+    if (numParticles >= 3) {
+      int p3_y = 58 - (((frame + 8) % 10) * 3);
+      int offsets[8] = {0, 1, 2, 1, 0, -1, -2, -1};
+      int p3_x = 64 + offsets[frame % 8];
+      if (p3_y > 24 && p3_y < 60) {
+        display.drawPixel(p3_x, p3_y, SSD1306_WHITE);
+      }
+    }
+  } else if (quality == "FAIR" || quality == "POOR") {
+    // Normal/Static plant
+    display.drawLine(64, 60, 64, 52, SSD1306_WHITE);
+    display.drawLine(64, 52, 64, 45, SSD1306_WHITE);
+
+    if (quality == "POOR") {
+      display.drawLine(64, 52, 55, 54, SSD1306_WHITE);
+      display.drawLine(64, 45, 73, 47, SSD1306_WHITE);
+    } else {
+      display.drawLine(64, 52, 56, 50, SSD1306_WHITE);
+      display.drawLine(64, 45, 72, 43, SSD1306_WHITE);
+    }
+  } else if (quality == "DANGER") {
+    // Wilted plant
+    display.drawLine(64, 60, 61, 53, SSD1306_WHITE);
+    display.drawLine(61, 53, 55, 50, SSD1306_WHITE);
+    display.drawLine(61, 53, 54, 57, SSD1306_WHITE);
+    display.drawLine(55, 50, 50, 53, SSD1306_WHITE);
+
+    if ((frame / 2) % 2 == 0) {
+      display.drawTriangle(95, 50, 105, 30, 115, 50, SSD1306_WHITE);
+      display.setCursor(103, 35);
+      display.print("!");
+    }
+  }
+}
+
 void updateOLED() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  // --- Dòng 1: P:{plant_code}  WM ---
+  bool isOffline = (WiFi.status() != WL_CONNECTED) || (!mqttClient.connected());
+  String quality = getLocalOverallQuality();
+
+  // --- Dòng 1: Trạng thái & Delta ---
   display.setCursor(0, 0);
-  display.printf("P:%s", String(DEFAULT_PLANT_CODE).substring(0, 6).c_str());
+  if (isOffline) {
+    display.print("TT: OFFLINE");
+  } else if (quality == "ERROR") {
+    display.print("TT: SENSOR ERROR");
+  } else {
+    double delta = 0.0;
+    if (quality == "EXCELLENT")
+      delta = 1.0;
+    else if (quality == "GOOD")
+      delta = 0.5;
+    else if (quality == "FAIR")
+      delta = 0.0;
+    else if (quality == "POOR")
+      delta = -0.3;
+    else if (quality == "DANGER")
+      delta = -0.8;
 
-  // Vẽ W và M ở góc phải
-  display.setCursor(128 - 12, 0);
-  if (WiFi.status() == WL_CONNECTED)
-    display.print("W");
-  else
-    display.print(" ");
-  if (mqttClient.connected())
-    display.print("M");
-  else
-    display.print(" ");
+    if (quality == "EXCELLENT") {
+      display.printf("TT: OPTIMAL (%+.1f)", delta);
+    } else {
+      display.printf("TT: %s (%+.1f)", quality.c_str(), delta);
+    }
+  }
 
-  // --- Dòng 2: Trạng thái ---
-  // Thu nhỏ chữ và dồn lên trên để tránh nửa dưới bị nhiễu
-  display.setTextSize(1);
-  display.setCursor(0, 10);
-  display.printf("Trang thai: %s", currentStatus.c_str());
-
-  // --- Dòng 3: Cấp bậc và EXP ---
-  display.setCursor(0, 20);
+  // --- Dòng 2: Cấp bậc và EXP ---
+  display.setCursor(0, 12);
   String display_rank = rank_name;
   if (rank_name == "Luyện Khí")
     display_rank = "Luyen Khi";
@@ -88,10 +414,23 @@ void updateOLED() {
     display_rank = "Truc Co";
   else if (rank_name == "Kim Đan")
     display_rank = "Kim Dan";
+  else if (rank_name == "Nguyên Anh")
+    display_rank = "Nguyen Anh";
+  else if (rank_name == "Hóa Thần")
+    display_rank = "Hoa Than";
+  else if (rank_name == "Đại Thừa")
+    display_rank = "Dai Thua";
+  else if (rank_name == "Độ Kiếp")
+    display_rank = "Do Kiep";
+  else if (rank_name == "Phàm Mộc")
+    display_rank = "Pham Moc";
   else if (rank_name == "Chưa rõ")
     display_rank = "Chua ro";
 
-  display.printf("%s: %ld", display_rank.c_str(), total_exp);
+  display.printf("%s : %.1f", display_rank.c_str(), total_exp);
+
+  // --- Ở dưới: Animation tương ứng với trạng thái ---
+  drawSproutAnimation(quality, isOffline, animFrame);
 
   display.display();
 }
@@ -113,7 +452,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     if (!error) {
 
       if (doc.containsKey("total_exp")) {
-        total_exp = doc["total_exp"].as<long>();
+        total_exp = doc["total_exp"].as<double>();
       }
 
       if (doc.containsKey("rank_name")) {
@@ -128,8 +467,15 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
         serverMessage = doc["message"].as<String>();
       }
 
+      if (doc.containsKey("next_reward_in_seconds")) {
+        long next_sec = doc["next_reward_in_seconds"].as<long>();
+        lastLocalExpAccumulate = millis() - (60 - next_sec) * 1000UL;
+        Serial.printf("Next reward in: %ld seconds. Synced local timer.\n",
+                      next_sec);
+      }
+
       Serial.println("=== SERVER UPDATE ===");
-      Serial.printf("EXP    : %ld\n", total_exp);
+      Serial.printf("EXP    : %.1f\n", total_exp);
       Serial.printf("Rank   : %s\n", rank_name.c_str());
       Serial.printf("Status : %s\n", currentStatus.c_str());
 
@@ -155,6 +501,9 @@ void reconnect() {
       Serial.println("connected");
       mqttClient.publish(status_topic, "online", true);
       mqttClient.subscribe(response_topic);
+      // Buộc gửi telemetry ngay lập tức để đồng bộ lại dữ liệu với server khi
+      // kết nối lại
+      lastMQTTPublish = 0;
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
@@ -169,29 +518,50 @@ void setup() {
 
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
 
+  Serial.println("--- KHAO SAT BUS I2C0 (OLED) ---");
+  for (byte address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    byte error = Wire.endTransmission();
+    if (error == 0) {
+      Serial.printf("  -> Tim thay thiet bi o dia chi: 0x%02X\n", address);
+    }
+  }
+  Serial.println("--------------------------------");
+
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
   } else {
     // Ép tốc độ I2C về chuẩn 100kHz để tránh nghẽn/xung đột với BH1750
     Wire.setClock(100000);
-    
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 20);
-    display.println("Moc Dao Tu Tien");
-    display.println("Khoi dong...");
-    display.display();
+
+    for (int frame = 0; frame <= 10; frame++) {
+      drawBootScreen(frame);
+      delay(200);
+    }
   }
 
   // Khởi tạo Cảm biến
   dht.begin();
-  
-  // Mở bus I2C riêng (Wire1) cho BH1750: SDA = 25, SCL = 26
-  Wire1.begin(25, 26); 
+
+  // Mở bus I2C riêng (Wire1) cho BH1750: SDA = 18, SCL = 19
+  Wire1.begin(18, 19);
+
+  Serial.println("--- KHAO SAT BUS I2C1 (BH1750) ---");
+  for (byte address = 1; address < 127; address++) {
+    Wire1.beginTransmission(address);
+    byte error = Wire1.endTransmission();
+    if (error == 0) {
+      Serial.printf("  -> Tim thay thiet bi o dia chi: 0x%02X\n", address);
+    }
+  }
+  Serial.println("----------------------------------");
+
   if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire1)) {
     Serial.println(F("BH1750 initialized"));
+    bh1750_detected = true;
   } else {
     Serial.println(F("Error initializing BH1750, check wiring/address!"));
+    bh1750_detected = false;
   }
 
   pinMode(PIN_SOIL_ADC, INPUT);
@@ -209,9 +579,57 @@ void setup() {
   // Chỉ hiển thị đúng nút cấu hình WiFi, ẩn hết các tính năng update/info khác
   std::vector<const char *> menu = {"wifi"};
   wm.setMenu(menu);
+  wm.setAPCallback(configModeCallback);
 
   String apName = "MocDao-" + String(DEFAULT_PLANT_CODE).substring(0, 6);
-  bool res = wm.autoConnect(apName.c_str());
+  bool connected = false;
+
+  WiFi.mode(WIFI_STA);
+
+  // Thử kết nối lại 3 lần nếu có credentials đã lưu
+  if (WiFi.SSID() != "") {
+    Serial.printf("Saved SSID found: %s. Attempting manual reconnect...\n",
+                  WiFi.SSID().c_str());
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      WiFi.begin();
+
+      unsigned long startAttempt = millis();
+      int animTick = 0;
+      while (millis() - startAttempt < 15000) {
+        if (WiFi.status() == WL_CONNECTED) {
+          connected = true;
+          break;
+        }
+        drawWifiConnectingScreen(attempt, animTick++);
+        delay(300);
+      }
+
+      if (connected) {
+        Serial.println("Manual WiFi reconnect successful!");
+        break;
+      } else {
+        Serial.printf("Attempt %d failed.\n", attempt);
+        for (int sec = 3; sec > 0; sec--) {
+          drawWifiRetryScreen(attempt, sec);
+          delay(1000);
+        }
+      }
+    }
+  }
+
+  // Nếu không kết nối được thủ công hoặc chưa có credentials, mở Portal cấu
+  // hình
+  if (!connected) {
+    Serial.println("Starting config portal...");
+    if (wm.startConfigPortal(apName.c_str())) {
+      connected = true;
+      Serial.println("WiFi connected via Config Portal!");
+    } else {
+      Serial.println("Config Portal timeout or failed!");
+    }
+  }
+
+  bool res = connected;
 
   if (!res) {
     Serial.println("Failed to connect");
@@ -220,22 +638,69 @@ void setup() {
 
     // Thực hiện HTTP Auth lấy Token
     HTTPClient http;
-    String authUrl = String(SERVER_HOST) + "/api/devices/" + DEFAULT_PLANT_CODE + "/auth";
+    String authUrl =
+        String(SERVER_HOST) + "/api/devices/" + DEFAULT_PLANT_CODE + "/auth";
     Serial.print("Authenticating with ");
     Serial.println(authUrl);
-    
+
     http.begin(authUrl);
     http.addHeader("Content-Type", "application/json");
-    
-    String payload = "{\"verify_code\":\"" + String(DEFAULT_VERIFY_CODE) + "\"}";
+
+    String payload =
+        "{\"verify_code\":\"" + String(DEFAULT_VERIFY_CODE) + "\"}";
     int httpResponseCode = http.POST(payload);
-    
+
     if (httpResponseCode == 200) {
       String response = http.getString();
       JsonDocument doc;
       deserializeJson(doc, response);
       jwtToken = doc["token"].as<String>();
       Serial.println("Auth Success! Token acquired.");
+
+      if (doc.containsKey("total_exp")) {
+        total_exp = doc["total_exp"].as<double>();
+      }
+      if (doc.containsKey("rank_name")) {
+        rank_name = doc["rank_name"].as<String>();
+      }
+
+      if (doc.containsKey("next_reward_in_seconds")) {
+        long next_sec = doc["next_reward_in_seconds"].as<long>();
+        lastLocalExpAccumulate = millis() - (60 - next_sec) * 1000UL;
+        Serial.printf("Next reward in: %ld seconds. Synced local timer.\n",
+                      next_sec);
+      }
+
+      // Trích xuất các trường ngưỡng lý tưởng từ đối tượng thresholds
+      if (doc.containsKey("thresholds") && !doc["thresholds"].isNull()) {
+        currentThresholds.tempMin =
+            doc["thresholds"]["temperature_min"].as<float>();
+        currentThresholds.tempMax =
+            doc["thresholds"]["temperature_max"].as<float>();
+        currentThresholds.humMin =
+            doc["thresholds"]["humidity_min"].as<float>();
+        currentThresholds.humMax =
+            doc["thresholds"]["humidity_max"].as<float>();
+        currentThresholds.soilMin =
+            doc["thresholds"]["soil_moisture_min"].as<float>();
+        currentThresholds.soilMax =
+            doc["thresholds"]["soil_moisture_max"].as<float>();
+        currentThresholds.lightMin = doc["thresholds"]["light_min"].as<float>();
+        currentThresholds.lightMax = doc["thresholds"]["light_max"].as<float>();
+        currentThresholds.hasThresholds = true;
+
+        Serial.println("=== Ngưỡng lý tưởng đã đồng bộ ===");
+        Serial.printf("  Nhiệt độ : %.1f - %.1f C\n", currentThresholds.tempMin,
+                      currentThresholds.tempMax);
+        Serial.printf("  Độ ẩm KK : %.1f - %.1f %%\n", currentThresholds.humMin,
+                      currentThresholds.humMax);
+        Serial.printf("  Độ ẩm đất: %.1f - %.1f %%\n",
+                      currentThresholds.soilMin, currentThresholds.soilMax);
+        Serial.printf("  Ánh sáng : %.1f - %.1f lux\n",
+                      currentThresholds.lightMin, currentThresholds.lightMax);
+      } else {
+        Serial.println("Không tìm thấy cấu hình ngưỡng trong phản hồi Auth.");
+      }
     } else {
       Serial.printf("Auth Failed! Code: %d\n", httpResponseCode);
       Serial.println(http.getString());
@@ -246,8 +711,37 @@ void setup() {
   mqttClient.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
 
+  // Mở rộng Buffer Size để chứa vừa chuỗi JWT Token dài
+  mqttClient.setBufferSize(1024);
+
   // Khởi tạo để gửi bản tin ngay sau khi boot
   lastMQTTPublish = millis() - 300000UL;
+  lastLocalExpAccumulate = millis();
+}
+
+// Bộ lọc nhiễu phần mềm (Median Filter + Outlier Rejection)
+int readFilteredSoilMoisture() {
+  int samples[15];
+  for (int i = 0; i < 15; i++) {
+    samples[i] = analogRead(PIN_SOIL_ADC);
+    delay(10);
+  }
+  // Sắp xếp mảng tăng dần (Bubble sort đơn giản)
+  for (int i = 0; i < 14; i++) {
+    for (int j = i + 1; j < 15; j++) {
+      if (samples[i] > samples[j]) {
+        int temp = samples[i];
+        samples[i] = samples[j];
+        samples[j] = temp;
+      }
+    }
+  }
+  // Loại bỏ 5 phần tử đầu và 5 phần tử cuối, lấy trung bình 5 phần tử ở giữa
+  long sum = 0;
+  for (int i = 5; i < 10; i++) {
+    sum += samples[i];
+  }
+  return sum / 5;
 }
 
 void loop() {
@@ -262,9 +756,55 @@ void loop() {
   unsigned long now = millis();
 
   // 1. OLED REFRESH LUÔN CHẠY MỖI GIÂY
-  if (now - lastOLEDUpdate >= 1000) {
+  if (now - lastOLEDUpdate >= 200) {
     lastOLEDUpdate = now;
+    animFrame = (animFrame + 1) % 100;
     updateOLED();
+  }
+
+  // 3. TỰ ĐỘNG TÍCH LŨY ĐIỂM CỤC BỘ MỖI 6 GIÂY (MỊN)
+  if (now - lastLocalExpAccumulate >= 6000UL) {
+    lastLocalExpAccumulate = now;
+
+    // Đóng băng nếu mất kết nối hoặc lỗi cảm biến
+    bool isOffline =
+        (WiFi.status() != WL_CONNECTED) || (!mqttClient.connected());
+    String quality = getLocalOverallQuality();
+
+    if (!isOffline && quality != "ERROR") {
+      double delta = 0.0;
+      if (quality == "EXCELLENT")
+        delta = 1.0;
+      else if (quality == "GOOD")
+        delta = 0.5;
+      else if (quality == "FAIR")
+        delta = 0.0;
+      else if (quality == "POOR")
+        delta = -0.3;
+      else if (quality == "DANGER")
+        delta = -0.8;
+
+      double old_exp = total_exp;
+      total_exp = total_exp + delta;
+      if (total_exp < 0.0) {
+        total_exp = 0.0;
+      }
+
+      rank_name = getLocalRank(total_exp);
+      if (delta != 0.0) {
+        Serial.printf("[Local EXP Update] Quality: %s | Delta: %+.1f | EXP: "
+                      "%.1f -> %.1f | Rank: %s\n",
+                      quality.c_str(), delta, old_exp, total_exp,
+                      rank_name.c_str());
+        updateOLED();
+      }
+    } else {
+      if (isOffline) {
+        Serial.println("[Local EXP] Frozen: Device is offline.");
+      } else {
+        Serial.println("[Local EXP] Frozen: Sensor error.");
+      }
+    }
   }
 
   // 2. SENSOR POLLING CHẠY MỖI 2 GIÂY
@@ -274,9 +814,19 @@ void loop() {
     // Đọc cảm biến
     float t = dht.readTemperature();
     float h = dht.readHumidity();
-    currentLux = lightMeter.readLightLevel();
+    if (bh1750_detected) {
+      currentLux = lightMeter.readLightLevel();
+    } else {
+      currentLux = -2.0;
+    }
 
-    int soil_raw = analogRead(PIN_SOIL_ADC);
+    // Đọc cảm biến độ ẩm đất bằng bộ lọc nhiễu phần mềm (Median Filter)
+    int soil_raw = readFilteredSoilMoisture();
+
+    // In giá trị raw ra Serial để user dễ dàng căn chỉnh (Calibrate) lại các
+    // mốc 4095 và 0
+    Serial.printf("Soil Raw: %d\n", soil_raw);
+
     currentSoil = map(soil_raw, 4095, 0, 0, 100);
     if (currentSoil < 0)
       currentSoil = 0;
@@ -290,6 +840,12 @@ void loop() {
       currentTemp = t;
       currentHum = h;
     }
+
+    // In thông số cảm biến liên tục mỗi 2 giây để tiện theo dõi và chọn ngưỡng
+    Serial.printf("[Sensor Log] Temp: %.1f C | Hum: %.1f%% | Soil Raw: %d "
+                  "(Mapped: %d%%) | Light: %.1f lux | DHT Error: %s\n",
+                  currentTemp, currentHum, soil_raw, currentSoil, currentLux,
+                  dhtError ? "ERROR" : "OK");
 
     // 3. KIỂM TRA ĐIỀU KIỆN PUBLISH
     bool shouldPublish = false;
@@ -329,14 +885,14 @@ void loop() {
       JsonObject tempObj = sensors.add<JsonObject>();
       tempObj["key"] = "temperature";
       if (dhtError)
-        tempObj["value"] = nullptr;
+        tempObj["value"] = -999.0;
       else
         tempObj["value"] = currentTemp;
 
       JsonObject humObj = sensors.add<JsonObject>();
       humObj["key"] = "humidity";
       if (dhtError)
-        humObj["value"] = nullptr;
+        humObj["value"] = -999.0;
       else
         humObj["value"] = currentHum;
 
@@ -346,7 +902,10 @@ void loop() {
 
       JsonObject lightObj = sensors.add<JsonObject>();
       lightObj["key"] = "light";
-      lightObj["value"] = currentLux;
+      if (currentLux < 0.0)
+        lightObj["value"] = -999.0;
+      else
+        lightObj["value"] = currentLux;
 
       String payload;
       serializeJson(doc, payload);
@@ -355,9 +914,14 @@ void loop() {
       Serial.println(payload);
 
       if (mqttClient.connected()) {
-        if (mqttClient.publish(telemetry_topic, payload.c_str())) {
-          // Lưu lại lịch sử để tính toán cho lần sau
-          lastMQTTPublish = now;
+        bool success = mqttClient.publish(telemetry_topic, payload.c_str());
+
+        // Luôn cập nhật thời gian để tránh kẹt vòng lặp gửi liên tục mỗi 2s
+        // trong trường hợp publish thất bại
+        lastMQTTPublish = now;
+
+        if (success) {
+          // Chỉ lưu lịch sử nhiệt độ/độ ẩm mới khi đã gửi thành công lên server
           lastDHTError = dhtError;
           if (!dhtError) {
             lastSentTemp = currentTemp;
