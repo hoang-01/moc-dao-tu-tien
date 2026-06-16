@@ -172,6 +172,9 @@ void setup() {
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
   } else {
+    // Ép tốc độ I2C về chuẩn 100kHz để tránh nghẽn/xung đột với BH1750
+    Wire.setClock(100000);
+    
     display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(0, 20);
@@ -182,7 +185,10 @@ void setup() {
 
   // Khởi tạo Cảm biến
   dht.begin();
-  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire)) {
+  
+  // Mở bus I2C riêng (Wire1) cho BH1750: SDA = 25, SCL = 26
+  Wire1.begin(25, 26); 
+  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire1)) {
     Serial.println(F("BH1750 initialized"));
   } else {
     Serial.println(F("Error initializing BH1750, check wiring/address!"));
