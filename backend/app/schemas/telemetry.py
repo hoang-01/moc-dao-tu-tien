@@ -27,3 +27,4 @@ class TelemetryResponse(BaseModel):
     total_exp: float = 0.0
     rank_name: str = "Phàm Mộc"
     message: str | None = None
+    next_reward_in_seconds: int = 60
