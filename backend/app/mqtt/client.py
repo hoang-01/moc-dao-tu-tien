@@ -64,10 +64,20 @@ async def on_message(client, topic: str, payload: bytes, qos, properties):
             try:
                 result = await process_telemetry(session, plant_code, sensors)
                 await session.commit()
+
+                # Gửi trả thông tin Tu Vi về màn hình OLED của ESP32
+                display_payload = json.dumps(
+                    {
+                        "total_exp": result.get("total_exp", 0),
+                        "rank_name": result.get("rank_name", "Phàm Mộc"),
+                    }
+                )
+                client.publish(f"devices/{plant_code}/display", display_payload, qos=1)
+
                 logger.debug(
                     "MQTT telemetry xử lý thành công: %s (EXP: %s)",
                     plant_code,
-                    result.get("exp_awarded"),
+                    result.get("total_exp"),
                 )
             except Exception:
                 await session.rollback()

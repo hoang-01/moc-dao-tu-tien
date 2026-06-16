@@ -23,12 +23,16 @@ async def get_leaderboard(
 
     Sắp xếp giảm dần theo total_exp.
     """
+    from app.models.user import User
+
     stmt = (
         select(Plant)
+        .join(Plant.user)
         .options(
             selectinload(Plant.user),
             selectinload(Plant.current_rank),
         )
+        .where(User.role != "admin")
         .order_by(Plant.total_exp.desc())
         .limit(limit)
     )

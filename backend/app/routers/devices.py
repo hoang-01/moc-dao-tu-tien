@@ -36,7 +36,9 @@ async def receive_telemetry(
         result = await process_telemetry(db, plant_code, body.sensors)
         return TelemetryResponse(
             status=result["status"],
-            exp_awarded=result["exp_awarded"],
+            exp_awarded=result.get("exp_awarded", False),
+            total_exp=result.get("total_exp", 0.0),
+            rank_name=result.get("rank_name", "Phàm Mộc"),
             message=result.get("message"),
         )
     except ValueError as e:

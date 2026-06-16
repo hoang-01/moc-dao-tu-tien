@@ -181,8 +181,28 @@ async def process_exp(
             "breakthrough": None,
         }
 
-    # 2. Lấy hệ số cộng/trừ
-    delta = await get_exp_delta(db, overall_quality)
+    # 1.5. Kiểm tra thiết bị Online hay Offline (Ngưỡng 6 phút)
+    is_offline = False
+    if plant.device and plant.device.last_seen_at:
+        now = datetime.now(UTC)
+        last_seen = plant.device.last_seen_at
+        if last_seen.tzinfo is None:
+            from datetime import timezone
+
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+
+        # Nếu thiết bị không gửi tín hiệu quá 6 phút (360 giây) -> Đóng băng
+        if (now - last_seen).total_seconds() > 360:
+            is_offline = True
+
+    if is_offline:
+        delta = 0.0
+        reason = "OFFLINE_PENALTY"
+        logger.info(f"❄️ Đóng băng Tu Vi chậu {plant.id} do mất kết nối mạng!")
+    else:
+        # 2. Lấy hệ số cộng/trừ bình thường
+        delta = await get_exp_delta(db, overall_quality)
+        reason = overall_quality
 
     # 3. Cập nhật Tu Vi (không cho âm)
     plant.total_exp = max(0.0, plant.total_exp + delta)
@@ -192,7 +212,7 @@ async def process_exp(
     exp_log = ExpLog(
         plant_id=plant.id,
         delta=delta,
-        reason=overall_quality,
+        reason=reason,
         overall_quality=overall_quality,
         total_exp_after=plant.total_exp,
     )

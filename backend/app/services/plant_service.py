@@ -21,8 +21,9 @@ from app.services.exp_service import (
 
 logger = logging.getLogger(__name__)
 
-# Thời gian để coi thiết bị là offline (giây)
-DEVICE_OFFLINE_THRESHOLD = 120
+# Ngưỡng thời gian để coi là thiết bị offline (giây)
+# ESP32 gửi heartbeat mỗi 5 phút (300s), nên set ngưỡng là 360s (6 phút)
+DEVICE_OFFLINE_THRESHOLD = 360
 
 
 async def pair_plant(
@@ -128,7 +129,7 @@ async def get_dashboard(db: AsyncSession, user: User) -> dict:
         )
     )
     result = await db.execute(stmt)
-    plant = result.scalar_one_or_none()
+    plant = result.scalars().first()
 
     if plant is None:
         raise ValueError("Chưa liên kết chậu cây")

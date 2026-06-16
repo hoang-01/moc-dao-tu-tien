@@ -23,5 +23,7 @@ class TelemetryResponse(BaseModel):
     """Response xác nhận đã nhận telemetry."""
 
     status: str = "ok"
-    exp_awarded: bool
+    exp_awarded: bool = False
+    total_exp: float = 0.0
+    rank_name: str = "Phàm Mộc"
     message: str | None = None
