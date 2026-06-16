@@ -110,11 +110,11 @@ async def check_anti_spam(plant: Plant) -> bool:
     now = time.time()
     # Lọc bỏ các timestamp cũ hơn 5 giây
     history = [t for t in _spam_tracker[plant.id] if t > now - 5.0]
-    
+
     # Thêm timestamp hiện tại vào
     history.append(now)
     _spam_tracker[plant.id] = history
-    
+
     # Nếu có từ 5 yêu cầu trở lên trong vòng 5 giây gần nhất -> spam
     if len(history) > 4:
         return False

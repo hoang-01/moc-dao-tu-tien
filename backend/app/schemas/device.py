@@ -48,5 +48,3 @@ class DeviceAuthResponse(BaseModel):
     next_reward_in_seconds: int = 60
     total_exp: float = 0.0
     rank_name: str = "Chưa rõ"
-
-

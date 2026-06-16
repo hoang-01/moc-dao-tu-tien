@@ -88,7 +88,9 @@ async def process_telemetry(
     overall_quality = get_overall_quality(list(qualities.values()))
 
     # Kiểm tra xem có lỗi cảm biến nào không (giá trị -999.0, loại trừ cảm biến light)
-    has_sensor_error = any(val == -999.0 for key, val in sensor_data.items() if key != "light")
+    has_sensor_error = any(
+        val == -999.0 for key, val in sensor_data.items() if key != "light"
+    )
     if has_sensor_error:
         overall_quality = "ERROR"
 
@@ -112,7 +114,10 @@ async def process_telemetry(
         "sensor_update",
         {
             "sensors": {
-                k: {"value": v, "quality": qualities.get(k, "FAIR") if v != -999.0 else "DANGER"}
+                k: {
+                    "value": v,
+                    "quality": qualities.get(k, "FAIR") if v != -999.0 else "DANGER",
+                }
                 for k, v in sensor_data.items()
             },
             "overall_quality": overall_quality,
@@ -123,9 +128,14 @@ async def process_telemetry(
     await db.flush()
 
     status = "ERROR" if has_sensor_error else "ok"
-    message = "Lỗi cảm biến!" if has_sensor_error else f"Xử lý thành công. Chất lượng: {overall_quality}"
+    message = (
+        "Lỗi cảm biến!"
+        if has_sensor_error
+        else f"Xử lý thành công. Chất lượng: {overall_quality}"
+    )
 
     from app.scheduler import get_next_reward_seconds
+
     next_sec = get_next_reward_seconds()
 
     return {

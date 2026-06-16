@@ -62,6 +62,7 @@ def get_next_reward_seconds() -> int:
         job = scheduler.get_job("exp_batch_job")
         if job and job.next_run_time:
             from datetime import datetime
+
             now = datetime.now(job.next_run_time.tzinfo)
             delta = (job.next_run_time - now).total_seconds()
             return max(0, int(delta))

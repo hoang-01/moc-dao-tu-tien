@@ -94,6 +94,7 @@ async def auth_device(
         }
 
     from app.scheduler import get_next_reward_seconds
+
     next_sec = get_next_reward_seconds()
 
     total_exp = 0.0
@@ -145,4 +146,3 @@ async def receive_telemetry(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
-
