@@ -52,8 +52,8 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/moc_dao_tu_tien
       - MQTT_BROKER_HOST=mqtt
       - MQTT_BROKER_PORT=1883
-      - APP_ENV=production
-      - APP_DEBUG=false
+      - APP_ENV=development
+      - APP_DEBUG=true
     depends_on:
       db:
         condition: service_healthy

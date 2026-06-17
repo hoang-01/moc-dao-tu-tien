@@ -35,17 +35,19 @@ graph TD
 ## 2. Các Cơ chế Vận hành Cốt lõi (Core Mechanisms)
 
 ### 2.1. Telemetry & Delta Sync (IoT)
-Thiết bị IoT (ESP32) **không gửi dữ liệu định kỳ**. Thay vào đó, thiết bị sử dụng cơ chế **Delta Sync**:
-- Thiết bị đọc cảm biến liên tục ở chế độ local.
-- Chỉ khi giá trị môi trường thay đổi vượt ngưỡng (ví dụ độ ẩm giảm > 5%), thiết bị mới bật WiFi và gửi MQTT.
-- Backend tiếp nhận dữ liệu, cập nhật ngay trạng thái `current_overall_quality` vào DB và **bắn Server-Sent Events (SSE)** về Frontend để người dùng thấy thông số nhảy số lập tức (Real-time).
+Thiết bị IoT (ESP32) đo đạc liên tục cục bộ và gửi dữ liệu thông qua cơ chế **Delta Sync**:
+- Thiết bị duy trì kết nối WiFi liên tục.
+- Thiết bị chỉ publish bản tin MQTT lên Server khi phát hiện có biến thiên chỉ số vượt ngưỡng: **Nhiệt độ thay đổi >= 0.5C**, hoặc **Độ ẩm không khí thay đổi >= 3%**, hoặc thay đổi trạng thái lỗi DHT.
+- Mạch gửi bản tin giữ nhịp (Heartbeat) định kỳ **mỗi 5 phút** để báo trạng thái hoạt động (online).
+- Bổ sung: Cảm biến ánh sáng BH1750 bị loại bỏ hoàn toàn khỏi thuật toán đánh giá chất lượng và logic lỗi để tránh lỗi phần cứng làm gián đoạn tu luyện (chỉ gửi dữ liệu thô).
+- Backend tiếp nhận dữ liệu, cập nhật trạng thái `current_overall_quality` và bắn sự kiện qua **SSE (Server-Sent Events)** về Client để người dùng thấy Dashboard nhảy số ngay lập tức.
 
-### 2.2. Batch Gamification (Tính điểm Tu Vi)
-Để ngăn chặn spam từ IoT và tách biệt luồng game hóa:
-- **KHÔNG tính điểm ngay khi nhận MQTT**.
-- **Cronjob Background (APScheduler)**: Hoạt động âm thầm quét bảng `plants` theo chu kỳ định sẵn (ví dụ 1 tiếng/lần). 
-- Dựa vào `current_overall_quality` mới nhất, hệ thống cộng điểm Tu Vi (EXP) đồng loạt cho tất cả chậu cây đang hoạt động.
-- Nếu điểm Tu Vi đủ điều kiện, tự động thăng cấp (Đột phá Cảnh Giới).
+### 2.2. Cơ chế Tu Vi & Chống Gian Lận (Gamification Engine)
+Để tối ưu hóa gameplay và ngăn chặn gian lận:
+- **Tích lũy Tu Vi cục bộ (mỗi 6s)**: Thiết bị tự động cộng/trừ Tu Vi mịn mỗi 6 giây dựa trên chất lượng môi trường đo được tức thời (Excellent/Optimal: +1.0, Good: +0.5, Fair: +0.0, Poor: -0.3, Danger: -0.8). Đóng băng (cộng 0 EXP) khi offline hoặc lỗi cảm biến.
+- **Đồng bộ hóa định kỳ (mỗi 1 phút)**: Bộ lập lịch APScheduler trên Backend chạy ngầm quét bảng `plants` mỗi 1 phút để cập nhật/đồng bộ EXP dựa vào trạng thái môi trường tổng hợp của cây trồng.
+- **Chống Spam (Anti-Spam)**: Sử dụng Rolling Window Rate Limit trong bộ nhớ RAM (`defaultdict(list)`). Chỉ đánh dấu là spam và bỏ qua tính điểm nếu thiết bị gửi dữ liệu liên tiếp >= 5 lần trong 5 giây gần nhất, giúp linh hoạt nhận dữ liệu biến đổi nhanh mà vẫn chống được hack điểm.
+- **Đóng băng do Mất mạng (Offline Penalty)**: Nếu thiết bị mất kết nối quá **6 phút (360 giây)**, Backend tự động kích hoạt hình phạt ngoại tuyến, đóng băng EXP tích lũy (`OFFLINE_PENALTY`).
 
 ### 2.3. Hỗ trợ Đa Chậu (Multi-plant) & DIY Provisioning
 - Một người dùng (User) có thể liên kết (Pair) với **nhiều chậu cây** cùng lúc (quan hệ `1-N`).
@@ -81,27 +83,38 @@ Hệ thống sử dụng **PostgreSQL** thông qua SQLAlchemy.
 ### 5.1. Authentication (Xác thực)
 - `POST /api/auth/google`: Đăng nhập bằng Google ID Token, nhận JWT (Access & Refresh).
 - `GET /api/auth/me`: Thông tin người dùng hiện tại (kèm danh sách cây sở hữu).
+- `POST /api/devices/{plant_code}/auth`: (IoT AUTH) Mạch ESP32 gọi khi khởi động, xác thực bằng `verify_code` để nhận về JWT `token`, `thresholds` (ngưỡng lý tưởng của giống cây), `next_reward_in_seconds` cùng giá trị `total_exp` và `rank_name` hiện thời trong DB để đồng bộ màn hình OLED ngay lập tức.
 
 ### 5.2. Quản lý Chậu cây (Plants)
-- `POST /api/plants/diy-provision`: (MỚI) Tự tạo mã nạp thiết bị cho User DIY.
+- `POST /api/plants/diy-provision`: Tự tạo mã nạp thiết bị cho User DIY.
 - `POST /api/plants/pair`: Liên kết Device vào tài khoản User.
 - `GET /api/plants/me/dashboard`: Lấy thông tin cây để hiển thị màn chính.
 - `GET /api/plants/me/history`: Xem biểu đồ dữ liệu lịch sử môi trường.
 
 ### 5.3. IoT Ingestion (Telemetry)
-- Thiết bị gửi vào Topic: `devices/{plant_code}/telemetry`
-- Payload dạng JSON:
-  ```json
-  {
-    "sensors": [
-      { "key": "soil_moisture", "value": 45.0 },
-      { "key": "light", "value": 1000.0 },
-      { "key": "temperature", "value": 28.0 },
-      { "key": "humidity", "value": 60.0 }
-    ]
-  }
-  ```
-
+- **Thiết bị gửi Telemetry (Publish)**: Topic `devices/{plant_code}/telemetry`
+  - Payload dạng JSON:
+    ```json
+    {
+      "token": "jwt_token_sau_khi_auth",
+      "sensors": [
+        { "key": "soil_moisture", "value": 45.0 },
+        { "key": "light", "value": 1000.0 },
+        { "key": "temperature", "value": 28.0 },
+        { "key": "humidity", "value": 60.0 }
+      ]
+    }
+    ```
+- **Backend phản hồi trạng thái (Subscribe)**: Topic `devices/{plant_code}/response`
+  - Server gửi thông số Tu Vi cập nhật ngay lập tức sau khi nhận Telemetry:
+    ```json
+    {
+      "total_exp": 123.5,
+      "rank_name": "Luyen Khi",
+      "status": "ok",
+      "message": "Xử lý thành công"
+    }
+    ```
 
 ### 5.4. Leaderboard (Xếp hạng)
 - `GET /api/leaderboard`: Danh sách cao thủ Tu Tiên (Top Cây có Tu Vi cao nhất).

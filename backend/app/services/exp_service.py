@@ -4,6 +4,8 @@
 """
 
 import logging
+import time
+from collections import defaultdict
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -19,9 +21,8 @@ from app.services.sse_service import sse_manager
 logger = logging.getLogger(__name__)
 
 # --- Hằng số Anti-Spam ---
-EXP_CYCLE_SECONDS = 60  # Chu kỳ tiêu chuẩn
-GRACE_PERIOD_SECONDS = 5  # Dung sai
-MIN_INTERVAL = EXP_CYCLE_SECONDS - GRACE_PERIOD_SECONDS  # 55 giây
+# _spam_tracker lưu danh sách các timestamp của các lượt gửi thành công trong vòng 5s gần nhất cho mỗi plant_id
+_spam_tracker = defaultdict(list)
 
 # --- Thang đo chất lượng ---
 QUALITY_ORDER = ["EXCELLENT", "GOOD", "FAIR", "POOR", "DANGER"]
@@ -100,25 +101,24 @@ async def get_exp_delta(db: AsyncSession, quality_level: str) -> float:
 
 
 async def check_anti_spam(plant: Plant) -> bool:
-    """Kiểm tra anti-spam: Có đủ thời gian kể từ lần thưởng cuối không?
+    """Kiểm tra anti-spam: 5 lần liên tục trong 5 giây thì mới được tính là spam.
 
     Returns:
-        True nếu đủ thời gian → được tính điểm.
-        False nếu chưa đủ 55s → bỏ qua.
+        True nếu không phải spam → được tính điểm.
+        False nếu là spam (>= 5 yêu cầu trong 5s gần nhất) → bỏ qua.
     """
-    if plant.last_exp_reward_at is None:
-        return True
+    now = time.time()
+    # Lọc bỏ các timestamp cũ hơn 5 giây
+    history = [t for t in _spam_tracker[plant.id] if t > now - 5.0]
 
-    now = datetime.now(UTC)
-    last = plant.last_exp_reward_at
-    # Đảm bảo last có timezone
-    if last.tzinfo is None:
-        from datetime import timezone
+    # Thêm timestamp hiện tại vào
+    history.append(now)
+    _spam_tracker[plant.id] = history
 
-        last = last.replace(tzinfo=timezone.utc)
-
-    elapsed = (now - last).total_seconds()
-    return elapsed >= MIN_INTERVAL
+    # Nếu có từ 5 yêu cầu trở lên trong vòng 5 giây gần nhất -> spam
+    if len(history) > 4:
+        return False
+    return True
 
 
 async def determine_rank(db: AsyncSession, total_exp: float) -> RankConfig:
@@ -199,6 +199,10 @@ async def process_exp(
         delta = 0.0
         reason = "OFFLINE_PENALTY"
         logger.info(f"❄️ Đóng băng Tu Vi chậu {plant.id} do mất kết nối mạng!")
+    elif overall_quality == "ERROR":
+        delta = 0.0
+        reason = "SENSOR_ERROR"
+        logger.info(f"❄️ Đóng băng Tu Vi chậu {plant.id} do lỗi cảm biến!")
     else:
         # 2. Lấy hệ số cộng/trừ bình thường
         delta = await get_exp_delta(db, overall_quality)
@@ -299,6 +303,8 @@ def classify_sensors_for_plant_type(
 
     qualities = {}
     for key, value in sensor_data.items():
+        if key == "light":
+            continue  # Bỏ qua cảm biến ánh sáng, không cho tham gia đánh giá chất lượng môi trường
         if key in thresholds:
             min_val, max_val = thresholds[key]
             qualities[key] = classify_sensor_quality(value, min_val, max_val)

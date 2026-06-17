@@ -19,13 +19,16 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 ## 3. Phạm vi dự án
 
 ### 3.1. Hệ thống Đo lường Môi trường
-- Thu thập dữ liệu từ các cảm biến IoT gắn trên thiết bị để đo các chỉ số môi trường sống của cây.
+- Thu thập dữ liệu từ các cảm biến IoT gắn trên thiết bị để đo các chỉ số môi trường sống của cây (Nhiệt độ, Độ ẩm không khí, Độ ẩm đất, Ánh sáng).
 - Phân loại chất lượng môi trường thành các mức, từ tốt đến nguy hiểm.
-- Loại cảm biến và chỉ số cụ thể sẽ được quy định trong tài liệu kỹ thuật.
+- Bỏ qua cảm biến ánh sáng khỏi thuật toán tính chất lượng môi trường tổng hợp và logic lỗi/đóng băng để tránh nhiễu phần cứng làm ảnh hưởng quá trình tích lũy Tu Vi (dữ liệu ánh sáng chỉ hiển thị thô).
 
 ### 3.2. Hệ thống Tu Vi (Điểm EXP) & Cảnh Giới
-- Điểm Tu Vi tích lũy liên tục theo chu kỳ, phản ánh chất lượng chăm sóc cây.
-- Môi trường tốt → cộng điểm; môi trường xấu/nguy hiểm → trừ điểm.
+- Điểm Tu Vi tích lũy liên tục theo hai cơ chế:
+  - **Tích lũy mịn tại mạch cục bộ (Micro-Increment)**: Tự tăng/giảm điểm nhỏ mịn mỗi 6 giây dựa trên chất lượng môi trường đo được tức thời.
+  - **Đồng bộ hàng loạt trên Backend**: APScheduler định kỳ chạy tính toán/đồng bộ Tu Vi theo khoảng thời gian thiết lập.
+- Môi trường tốt (Excellent/Good) → cộng điểm; môi trường xấu/nguy hiểm (Poor/Danger) → trừ điểm; môi trường trung bình (Fair) hoặc mất cảm biến/offline → đóng băng (cộng 0 EXP).
+- Hỗ trợ cơ chế tự động đóng băng điểm Tu Vi khi thiết bị mất kết nối quá 6 phút (Offline Penalty) hoặc gặp sự cố cảm biến DHT.
 - So sánh dữ liệu thực tế với ngưỡng lý tưởng theo loại cây.
 - Khi đạt đủ Tu Vi, cây **đột phá Cảnh Giới** lên bậc cao hơn — tạo mục tiêu ngắn hạn và động lực cho người dùng. Các mốc cảnh giới cụ thể được định nghĩa trong tài liệu kỹ thuật.
 
@@ -78,9 +81,10 @@ Xây dựng một hệ thống IoT kết hợp Gamification, biến việc chăm
 
 | Hạng mục | Nội dung |
 |---|---|
-| Phần cứng | Thiết bị IoT cắm trực tiếp vào chậu cây thật |
+| Phần cứng | Thiết bị IoT cắm trực tiếp vào chậu cây thật. Sử dụng cảm biến điện dung cho đất, DHT22 cho nhiệt độ/độ ẩm không khí, và BH1750 cho ánh sáng (bị bỏ qua trong chất lượng tổng hợp). Màn hình OLED SSD1306 hiển thị trạng thái tối giản. |
 | Loại cây | Cây tuổi thọ dài (Kim Tiền, Lưỡi Hổ…) |
-| Phạm vi | 1 tài khoản — 1 chậu cây |
+| Phạm vi | Hỗ trợ 1 tài khoản liên kết với nhiều chậu cây khác nhau (được đồng bộ riêng lẻ) |
+| Kết nối | Thiết bị cần kết nối Internet (WiFi) để gửi dữ liệu và đồng bộ trạng thái từ DB |
 
 ## 5. Tiêu chí chấp nhận (Acceptance Criteria)
 

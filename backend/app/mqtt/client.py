@@ -69,10 +69,12 @@ async def on_message(client, topic: str, payload: bytes, qos, properties):
                 display_payload = json.dumps(
                     {
                         "total_exp": result.get("total_exp", 0),
-                        "rank_name": result.get("rank_name", "Phàm Mộc"),
+                        "rank_name": result.get("rank_name", "Pham Moc"),
+                        "status": result.get("status", "ok"),
+                        "message": result.get("message", ""),
                     }
                 )
-                client.publish(f"devices/{plant_code}/display", display_payload, qos=1)
+                client.publish(f"devices/{plant_code}/response", display_payload, qos=1)
 
                 logger.debug(
                     "MQTT telemetry xử lý thành công: %s (EXP: %s)",
