@@ -10,7 +10,6 @@
 #include <WiFiManager.h>
 #include <Wire.h>
 
-
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
@@ -48,6 +47,18 @@ bool currentDHTError = false;
 unsigned long lastLocalExpAccumulate = 0;
 bool bh1750_detected = false;
 int animFrame = 0;
+
+// OLED Layout Constants
+#define PLANT_X 36
+#define EXP_BAR_X 106
+#define EXP_BAR_Y 28
+#define EXP_BAR_W 8
+#define EXP_BAR_H 32
+
+// Breakthrough / Level-Up State
+String last_known_rank = "";
+bool triggerLevelUpAnim = false;
+unsigned long levelUpStartTime = 0;
 
 // Topics
 char telemetry_topic[100];
@@ -160,6 +171,54 @@ String getLocalRank(double exp) {
   return "Pham Moc";
 }
 
+int getRankIndex(String rank) {
+  if (rank == "Do Kiep" || rank == "Độ Kiếp")
+    return 7;
+  if (rank == "Dai Thua" || rank == "Đại Thừa")
+    return 6;
+  if (rank == "Hoa Than" || rank == "Hóa Thần")
+    return 5;
+  if (rank == "Nguyen Anh" || rank == "Nguyên Anh")
+    return 4;
+  if (rank == "Kim Dan" || rank == "Kim Đan")
+    return 3;
+  if (rank == "Truc Co" || rank == "Trúc Cơ")
+    return 2;
+  if (rank == "Luyen Khi" || rank == "Luyện Khí")
+    return 1;
+  return 0; // Pham Moc
+}
+
+double getRankProgress(double exp, double &current_min, double &next_min) {
+  if (exp >= 30000.0) {
+    current_min = 30000.0;
+    next_min = 30000.0;
+    return 1.0;
+  } else if (exp >= 15000.0) {
+    current_min = 15000.0;
+    next_min = 30000.0;
+  } else if (exp >= 8000.0) {
+    current_min = 8000.0;
+    next_min = 15000.0;
+  } else if (exp >= 4000.0) {
+    current_min = 4000.0;
+    next_min = 8000.0;
+  } else if (exp >= 1500.0) {
+    current_min = 1500.0;
+    next_min = 4000.0;
+  } else if (exp >= 500.0) {
+    current_min = 500.0;
+    next_min = 1500.0;
+  } else if (exp >= 100.0) {
+    current_min = 100.0;
+    next_min = 500.0;
+  } else {
+    current_min = 0.0;
+    next_min = 100.0;
+  }
+  return (exp - current_min) / (next_min - current_min);
+}
+
 bool isEnvironmentOptimal() {
   if (!currentThresholds.hasThresholds)
     return false;
@@ -270,39 +329,39 @@ void configModeCallback(WiFiManager *myWiFiManager) {
 
 void drawSproutAnimation(String quality, bool isOffline, int frame) {
   // Ground line
-  display.drawFastHLine(48, 60, 32, SSD1306_WHITE);
+  display.drawFastHLine(PLANT_X - 16, 60, 32, SSD1306_WHITE);
 
   if (isOffline) {
     // Wilted plant + offline icon
-    display.drawLine(64, 60, 61, 53, SSD1306_WHITE);
-    display.drawLine(61, 53, 55, 50, SSD1306_WHITE);
-    display.drawLine(61, 53, 54, 57, SSD1306_WHITE);
-    display.drawLine(55, 50, 50, 53, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 60, PLANT_X - 3, 53, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 3, 53, PLANT_X - 9, 50, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 3, 53, PLANT_X - 10, 57, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 9, 50, PLANT_X - 14, 53, SSD1306_WHITE);
 
     // Flashing Offline WiFi symbol (slashed)
     if ((frame / 2) % 2 == 0) {
-      int wx = 100;
+      int wx = 72;
       int wy = 45;
       display.fillCircle(wx, wy, 2, SSD1306_WHITE);
       display.drawCircleHelper(wx, wy, 6, 1, SSD1306_WHITE);
       display.drawCircleHelper(wx, wy, 6, 2, SSD1306_WHITE);
       display.drawCircleHelper(wx, wy, 12, 1, SSD1306_WHITE);
       display.drawCircleHelper(wx, wy, 12, 2, SSD1306_WHITE);
-      display.drawLine(90, 35, 110, 55, SSD1306_WHITE);
+      display.drawLine(wx - 10, wy - 10, wx + 10, wy + 10, SSD1306_WHITE);
     }
     return;
   }
 
   if (quality == "ERROR") {
     // Wilted plant + warning sign
-    display.drawLine(64, 60, 61, 53, SSD1306_WHITE);
-    display.drawLine(61, 53, 55, 50, SSD1306_WHITE);
-    display.drawLine(61, 53, 54, 57, SSD1306_WHITE);
-    display.drawLine(55, 50, 50, 53, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 60, PLANT_X - 3, 53, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 3, 53, PLANT_X - 9, 50, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 3, 53, PLANT_X - 10, 57, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 9, 50, PLANT_X - 14, 53, SSD1306_WHITE);
 
     if ((frame / 2) % 2 == 0) {
-      display.drawTriangle(95, 50, 105, 30, 115, 50, SSD1306_WHITE);
-      display.setCursor(103, 35);
+      display.drawTriangle(67, 50, 77, 30, 87, 50, SSD1306_WHITE);
+      display.setCursor(75, 35);
       display.print("!");
     }
     return;
@@ -315,59 +374,81 @@ void drawSproutAnimation(String quality, bool isOffline, int frame) {
     int sway = swayOffsets[frame % 4];
     int leafSway = leafOffsets[frame % 4];
 
-    display.drawLine(64, 60, 64, 52, SSD1306_WHITE);
-    display.drawLine(64, 52, 64 + sway, 44, SSD1306_WHITE);
-    display.drawLine(64, 52, 56, 48 - leafSway, SSD1306_WHITE);
-    display.drawLine(64 + sway, 44, 74 + sway, 40 + leafSway, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 60, PLANT_X, 52, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 52, PLANT_X + sway, 44, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 52, PLANT_X - 8, 48 - leafSway, SSD1306_WHITE);
+    display.drawLine(PLANT_X + sway, 44, PLANT_X + 10 + sway, 40 + leafSway,
+                     SSD1306_WHITE);
 
-    // Rising particles of energy
-    int numParticles = (quality == "EXCELLENT") ? 3 : 1;
-    if (numParticles >= 1) {
-      int p1_y = 58 - ((frame % 10) * 3);
-      int p1_x = 64 - 10 + ((frame % 10) % 3);
-      if (p1_y > 24 && p1_y < 60) {
-        display.drawPixel(p1_x, p1_y, SSD1306_WHITE);
-      }
-    }
-    if (numParticles >= 2) {
-      int p2_y = 58 - (((frame + 4) % 10) * 3);
-      int p2_x = 64 + 8 - (((frame + 4) % 10) % 3);
-      if (p2_y > 24 && p2_y < 60) {
-        display.drawPixel(p2_x, p2_y, SSD1306_WHITE);
-      }
-    }
-    if (numParticles >= 3) {
-      int p3_y = 58 - (((frame + 8) % 10) * 3);
-      int offsets[8] = {0, 1, 2, 1, 0, -1, -2, -1};
-      int p3_x = 64 + offsets[frame % 8];
-      if (p3_y > 24 && p3_y < 60) {
-        display.drawPixel(p3_x, p3_y, SSD1306_WHITE);
+    // Rising particles of energy (Spiritual Qi)
+    int numParticles = (quality == "EXCELLENT") ? 4 : 2;
+    int speedFactor = (quality == "EXCELLENT") ? 4 : 2;
+    for (int i = 0; i < numParticles; i++) {
+      int p_y = 58 - (((frame * speedFactor + i * 12) % 36));
+      int x_offsets[4] = {-8, 6, -3, 8};
+      int p_x = PLANT_X + x_offsets[i % 4] + ((frame + i) % 3 - 1);
+      if (p_y > 24 && p_y < 60) {
+        display.drawPixel(p_x, p_y, SSD1306_WHITE);
       }
     }
   } else if (quality == "FAIR" || quality == "POOR") {
     // Normal/Static plant
-    display.drawLine(64, 60, 64, 52, SSD1306_WHITE);
-    display.drawLine(64, 52, 64, 45, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 60, PLANT_X, 52, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 52, PLANT_X, 45, SSD1306_WHITE);
 
     if (quality == "POOR") {
-      display.drawLine(64, 52, 55, 54, SSD1306_WHITE);
-      display.drawLine(64, 45, 73, 47, SSD1306_WHITE);
+      display.drawLine(PLANT_X, 52, PLANT_X - 9, 54, SSD1306_WHITE);
+      display.drawLine(PLANT_X, 45, PLANT_X + 9, 47, SSD1306_WHITE);
+
+      // Falling "Tu khi" (dark particles) - slow/sparse (1 particle)
+      int p_y = 44 + ((frame) % 16);
+      int p_x = PLANT_X - 6 + ((frame / 4) % 2 == 0 ? 1 : -1);
+      if (p_y > 44 && p_y < 60) {
+        display.drawPixel(p_x, p_y, SSD1306_WHITE);
+      }
     } else {
-      display.drawLine(64, 52, 56, 50, SSD1306_WHITE);
-      display.drawLine(64, 45, 72, 43, SSD1306_WHITE);
+      display.drawLine(PLANT_X, 52, PLANT_X - 8, 50, SSD1306_WHITE);
+      display.drawLine(PLANT_X, 45, PLANT_X + 8, 43, SSD1306_WHITE);
     }
   } else if (quality == "DANGER") {
     // Wilted plant
-    display.drawLine(64, 60, 61, 53, SSD1306_WHITE);
-    display.drawLine(61, 53, 55, 50, SSD1306_WHITE);
-    display.drawLine(61, 53, 54, 57, SSD1306_WHITE);
-    display.drawLine(55, 50, 50, 53, SSD1306_WHITE);
+    display.drawLine(PLANT_X, 60, PLANT_X - 3, 53, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 3, 53, PLANT_X - 9, 50, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 3, 53, PLANT_X - 10, 57, SSD1306_WHITE);
+    display.drawLine(PLANT_X - 9, 50, PLANT_X - 14, 53, SSD1306_WHITE);
 
     if ((frame / 2) % 2 == 0) {
-      display.drawTriangle(95, 50, 105, 30, 115, 50, SSD1306_WHITE);
-      display.setCursor(103, 35);
+      display.drawTriangle(67, 50, 77, 30, 87, 50, SSD1306_WHITE);
+      display.setCursor(75, 35);
       display.print("!");
     }
+
+    // Falling "Tu khi" (dark particles) - fast/dense (3 particles)
+    for (int i = 0; i < 3; i++) {
+      int p_y = 44 + (((frame * 3 + i * 6) % 16));
+      int x_offsets[3] = {-9, 5, 0};
+      int p_x = PLANT_X + x_offsets[i] + ((frame + i) % 2);
+      if (p_y > 44 && p_y < 60) {
+        display.drawPixel(p_x, p_y, SSD1306_WHITE);
+      }
+    }
+  }
+}
+
+void drawExpBar(double exp) {
+  double current_min = 0.0;
+  double next_min = 0.0;
+  double progress = getRankProgress(exp, current_min, next_min);
+
+  // Draw EXP bar frame
+  display.drawRect(EXP_BAR_X, EXP_BAR_Y, EXP_BAR_W, EXP_BAR_H, SSD1306_WHITE);
+
+  // Fill progress (bottom-up) with 2px padding
+  int inside_h = EXP_BAR_H - 4;
+  int fill_h = (int)(progress * inside_h);
+  if (fill_h > 0) {
+    display.fillRect(EXP_BAR_X + 2, EXP_BAR_Y + EXP_BAR_H - 2 - fill_h,
+                     EXP_BAR_W - 4, fill_h, SSD1306_WHITE);
   }
 }
 
@@ -378,13 +459,33 @@ void updateOLED() {
 
   bool isOffline = (WiFi.status() != WL_CONNECTED) || (!mqttClient.connected());
   String quality = getLocalOverallQuality();
+  unsigned long now = millis();
 
-  // --- Dòng 1: Trạng thái & Delta ---
+  // Check breakthrough / level-up trigger
+  String current_rank = getLocalRank(total_exp);
+  if (last_known_rank != "" && last_known_rank != "Chưa rõ" &&
+      last_known_rank != "Chua ro") {
+    if (getRankIndex(current_rank) > getRankIndex(last_known_rank)) {
+      triggerLevelUpAnim = true;
+      levelUpStartTime = now;
+    }
+  }
+  last_known_rank = current_rank;
+
+  if (triggerLevelUpAnim) {
+    if (now - levelUpStartTime > 2500) {
+      triggerLevelUpAnim = false;
+    }
+  }
+
+  // --- Row 1: Status & Delta ---
   display.setCursor(0, 0);
-  if (isOffline) {
-    display.print("TT: OFFLINE");
+  if (triggerLevelUpAnim) {
+    display.print("TT: DOT PHA!");
+  } else if (isOffline) {
+    display.print("TT: MAT KET NOI");
   } else if (quality == "ERROR") {
-    display.print("TT: SENSOR ERROR");
+    display.print("TT: LOI CAM BIEN");
   } else {
     double delta = 0.0;
     if (quality == "EXCELLENT")
@@ -399,13 +500,19 @@ void updateOLED() {
       delta = -0.8;
 
     if (quality == "EXCELLENT") {
-      display.printf("TT: OPTIMAL (%+.1f)", delta);
+      display.printf("TT: EXCELLENT (%+.1f)", delta);
+    } else if (quality == "GOOD") {
+      display.printf("TT: GOOD (%+.1f)", delta);
+    } else if (quality == "FAIR") {
+      display.printf("TT: FAIR (%+.1f)", delta);
+    } else if (quality == "POOR") {
+      display.printf("TT: POOR (%+.1f)", delta);
     } else {
-      display.printf("TT: %s (%+.1f)", quality.c_str(), delta);
+      display.printf("TT: DANGER (%+.1f)", delta);
     }
   }
 
-  // --- Dòng 2: Cấp bậc và EXP ---
+  // --- Row 2: Rank & EXP ---
   display.setCursor(0, 12);
   String display_rank = rank_name;
   if (rank_name == "Luyện Khí")
@@ -429,8 +536,35 @@ void updateOLED() {
 
   display.printf("%s : %.1f", display_rank.c_str(), total_exp);
 
-  // --- Ở dưới: Animation tương ứng với trạng thái ---
+  // --- Plant Animation ---
   drawSproutAnimation(quality, isOffline, animFrame);
+
+  if (triggerLevelUpAnim) {
+    // Draw expanding rings of light centered around the plant center (36, 50)
+    unsigned long elapsed = now - levelUpStartTime;
+    int r1 = (elapsed / 10) % 35;
+    int r2 = ((elapsed + 400) / 10) % 35;
+    int r3 = ((elapsed + 800) / 10) % 35;
+
+    display.drawCircle(PLANT_X, 50, r1, SSD1306_WHITE);
+    if (elapsed >= 400) {
+      display.drawCircle(PLANT_X, 50, r2, SSD1306_WHITE);
+    }
+    if (elapsed >= 800) {
+      display.drawCircle(PLANT_X, 50, r3, SSD1306_WHITE);
+    }
+
+    // Flash DOT PHA! text on the right
+    if ((elapsed / 200) % 2 == 0) {
+      display.setCursor(94, 32);
+      display.print("DOT");
+      display.setCursor(94, 44);
+      display.print("PHA!");
+    }
+  } else {
+    // Draw vertical EXP bar
+    drawExpBar(total_exp);
+  }
 
   display.display();
 }
