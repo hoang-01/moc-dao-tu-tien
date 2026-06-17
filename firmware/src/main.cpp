@@ -38,12 +38,14 @@ String serverMessage = "";
 float lastSentTemp = -999.0;
 float lastSentHum = -999.0;
 bool lastDHTError = false;
+bool lastSoilError = false;
 
 float currentTemp = 0.0;
 float currentHum = 0.0;
 float currentLux = 0.0;
 int currentSoil = 0;
 bool currentDHTError = false;
+bool currentSoilError = false;
 unsigned long lastLocalExpAccumulate = 0;
 bool bh1750_detected = false;
 int animFrame = 0;
@@ -108,7 +110,7 @@ String classifySensorQuality(float value, float idealMin, float idealMax) {
 }
 
 String getLocalOverallQuality() {
-  if (currentDHTError) {
+  if (currentDHTError || currentSoilError) {
     return "ERROR";
   }
   if (!currentThresholds.hasThresholds) {
@@ -964,11 +966,19 @@ void loop() {
     // mốc 4095 và 0
     Serial.printf("Soil Raw: %d\n", soil_raw);
 
-    currentSoil = map(soil_raw, 4095, 0, 0, 100);
-    if (currentSoil < 0)
-      currentSoil = 0;
-    if (currentSoil > 100)
-      currentSoil = 100;
+    // Phát hiện lỗi cảm biến đất (tuột dây hoặc chập mạch)
+    bool soilError = (soil_raw > 4000 || soil_raw < 100);
+    currentSoilError = soilError;
+
+    if (!soilError) {
+      currentSoil = map(soil_raw, 4095, 0, 0, 100);
+      if (currentSoil < 0)
+        currentSoil = 0;
+      if (currentSoil > 100)
+        currentSoil = 100;
+    } else {
+      currentSoil = -999;
+    }
 
     bool dhtError = isnan(t) || isnan(h);
     currentDHTError = dhtError;
@@ -980,9 +990,9 @@ void loop() {
 
     // In thông số cảm biến liên tục mỗi 2 giây để tiện theo dõi và chọn ngưỡng
     Serial.printf("[Sensor Log] Temp: %.1f C | Hum: %.1f%% | Soil Raw: %d "
-                  "(Mapped: %d%%) | Light: %.1f lux | DHT Error: %s\n",
+                  "(Mapped: %d%%) | Light: %.1f lux | DHT Error: %s | Soil Error: %s\n",
                   currentTemp, currentHum, soil_raw, currentSoil, currentLux,
-                  dhtError ? "ERROR" : "OK");
+                  dhtError ? "ERROR" : "OK", soilError ? "ERROR" : "OK");
 
     // 3. KIỂM TRA ĐIỀU KIỆN PUBLISH
     bool shouldPublish = false;
@@ -992,8 +1002,8 @@ void loop() {
       shouldPublish = true;
     }
 
-    // Điều kiện B: Thay đổi trạng thái lỗi DHT
-    if (dhtError != lastDHTError) {
+    // Điều kiện B: Thay đổi trạng thái lỗi DHT hoặc cảm biến đất
+    if (dhtError != lastDHTError || soilError != lastSoilError) {
       shouldPublish = true;
     }
 
@@ -1035,7 +1045,10 @@ void loop() {
 
       JsonObject soilObj = sensors.add<JsonObject>();
       soilObj["key"] = "soil_moisture";
-      soilObj["value"] = currentSoil;
+      if (currentSoilError)
+        soilObj["value"] = -999.0;
+      else
+        soilObj["value"] = currentSoil;
 
       JsonObject lightObj = sensors.add<JsonObject>();
       lightObj["key"] = "light";
@@ -1058,8 +1071,9 @@ void loop() {
         lastMQTTPublish = now;
 
         if (success) {
-          // Chỉ lưu lịch sử nhiệt độ/độ ẩm mới khi đã gửi thành công lên server
+          // Chỉ lưu lịch sử nhiệt độ/độ ẩm/lỗi mới khi đã gửi thành công lên server
           lastDHTError = dhtError;
+          lastSoilError = soilError;
           if (!dhtError) {
             lastSentTemp = currentTemp;
             lastSentHum = currentHum;
@@ -1070,6 +1084,7 @@ void loop() {
         // logic tính sai lệch khiến payload in ra Serial liên tục mỗi 2s.
         lastMQTTPublish = now;
         lastDHTError = dhtError;
+        lastSoilError = soilError;
         if (!dhtError) {
           lastSentTemp = currentTemp;
           lastSentHum = currentHum;
