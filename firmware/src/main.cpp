@@ -715,7 +715,10 @@ void setup() {
   wm.setMenu(menu);
   wm.setAPCallback(configModeCallback);
 
-  String apName = "MocDao-" + String(DEFAULT_PLANT_CODE).substring(0, 6);
+  String apName = "MocDao-" + String(DEFAULT_PLANT_CODE);
+  if (apName.length() > 32) {
+    apName = apName.substring(0, 32);
+  }
   bool connected = false;
 
   WiFi.mode(WIFI_STA);
