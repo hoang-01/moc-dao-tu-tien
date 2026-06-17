@@ -679,22 +679,13 @@ void setup() {
   // Khởi tạo Cảm biến
   dht.begin();
 
-  // Mở bus I2C riêng (Wire1) cho BH1750: SDA = 18, SCL = 19
-  Wire1.begin(18, 19);
-
-  Serial.println("--- KHAO SAT BUS I2C1 (BH1750) ---");
-  for (byte address = 1; address < 127; address++) {
-    Wire1.beginTransmission(address);
-    byte error = Wire1.endTransmission();
-    if (error == 0) {
-      Serial.printf("  -> Tim thay thiet bi o dia chi: 0x%02X\n", address);
-    }
-  }
-  Serial.println("----------------------------------");
-
-  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire1)) {
-    Serial.println(F("BH1750 initialized"));
+  // BH1750 cùng bus với OLED (GPIO 21/22) → dùng Wire
+  // NOTE: Photodiode hỏng → trả 0.0 lux. Cần thay module mới.
+  delay(50);
+  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire)) {
+    Serial.println(F("BH1750 initialized on Wire (GPIO21/22, shared OLED)"));
     bh1750_detected = true;
+    delay(200);
   } else {
     Serial.println(F("Error initializing BH1750, check wiring/address!"));
     bh1750_detected = false;
@@ -989,10 +980,11 @@ void loop() {
     }
 
     // In thông số cảm biến liên tục mỗi 2 giây để tiện theo dõi và chọn ngưỡng
-    Serial.printf("[Sensor Log] Temp: %.1f C | Hum: %.1f%% | Soil Raw: %d "
-                  "(Mapped: %d%%) | Light: %.1f lux | DHT Error: %s | Soil Error: %s\n",
-                  currentTemp, currentHum, soil_raw, currentSoil, currentLux,
-                  dhtError ? "ERROR" : "OK", soilError ? "ERROR" : "OK");
+    Serial.printf(
+        "[Sensor Log] Temp: %.1f C | Hum: %.1f%% | Soil Raw: %d "
+        "(Mapped: %d%%) | Light: %.1f lux | DHT Error: %s | Soil Error: %s\n",
+        currentTemp, currentHum, soil_raw, currentSoil, currentLux,
+        dhtError ? "ERROR" : "OK", soilError ? "ERROR" : "OK");
 
     // 3. KIỂM TRA ĐIỀU KIỆN PUBLISH
     bool shouldPublish = false;
@@ -1071,7 +1063,8 @@ void loop() {
         lastMQTTPublish = now;
 
         if (success) {
-          // Chỉ lưu lịch sử nhiệt độ/độ ẩm/lỗi mới khi đã gửi thành công lên server
+          // Chỉ lưu lịch sử nhiệt độ/độ ẩm/lỗi mới khi đã gửi thành công lên
+          // server
           lastDHTError = dhtError;
           lastSoilError = soilError;
           if (!dhtError) {
